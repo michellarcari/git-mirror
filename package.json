@@ -1,0 +1,18 @@
+{
+  "name": "git-mirror",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Push-only Git mirror distribution over HTTPS coordinated by MQTT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start:gateway": "node src/gateway.js",
+    "start:client": "node src/client.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "mqtt": "^5.15.0"
+  }
+}
