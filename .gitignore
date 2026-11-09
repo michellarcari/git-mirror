@@ -1,0 +1,9 @@
+node_modules/
+.env
+.env.*
+!.env.example
+config/gateway.json
+config/client.json
+*.bundle
+*.log
+coverage/
