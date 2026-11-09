@@ -4,6 +4,7 @@ node_modules/
 !.env.example
 config/gateway.json
 config/client.json
+config/deploy.json
 *.bundle
 *.log
 coverage/
