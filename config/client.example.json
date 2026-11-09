@@ -1,0 +1,15 @@
+{
+  "clientId": "server-a",
+  "topicPrefix": "git-mirror/v1",
+  "httpHost": "127.0.0.1",
+  "httpPort": 8787,
+  "syncIntervalSeconds": 300,
+  "maxBundleBytes": 2147483648,
+  "repositories": [
+    {
+      "id": "myapp",
+      "branch": "main",
+      "mirrorPath": "/var/lib/git-mirror/replicas/myapp.git"
+    }
+  ]
+}
