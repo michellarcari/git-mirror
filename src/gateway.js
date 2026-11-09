@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import mqtt from 'mqtt';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
