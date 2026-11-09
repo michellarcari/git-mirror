@@ -9,7 +9,7 @@ const args = process.argv.slice(2);
 const apply = args.includes('--apply');
 const configIndex = args.indexOf('--config');
 if (args.some((arg, index) => arg !== '--apply' && arg !== '--config' &&
-    index !== configIndex + 1) || (configIndex !== -1 && !args[configIndex + 1])) {
+    !(configIndex >= 0 && index === configIndex + 1)) || (configIndex !== -1 && !args[configIndex + 1])) {
   throw new Error('Usage: npm run deploy -- [--config config/deploy.json] [--apply]');
 }
 const configPath = path.resolve(configIndex < 0 ? (process.env.DEPLOY_CONFIG || 'config/deploy.json') : args[configIndex + 1]);
