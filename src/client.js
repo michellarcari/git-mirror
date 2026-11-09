@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import http from 'node:http';
 import mqtt from 'mqtt';
 import path from 'node:path';
