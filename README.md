@@ -131,16 +131,59 @@ cd /ibv-apps/git-mirror
 cp config/deploy.example.json config/deploy.json
 ```
 
-The staging example uses `/ibv-apps/portal`, branch `staging`, and
-`/ibv-apps/git-mirror/replicas/portal.git`. Adjust paths and commands for other
-servers. `prepareCommands` and `testCommands` are argv arrays (no shell), run
+The deploy config now accepts multiple named entries in `repositories`.
+Each entry has its own `id`, checkout, bare mirror path, branch and independent
+prepare/test commands. The example contains the existing `portal` staging repo;
+add other deployed repositories as additional objects. No gateway/client change
+is required for this local checkout selection, but each bare replica must already
+be configured in the regular MQTT mirroring settings.
+
+```json
+{
+  "repositories": [
+    {
+      "id": "portal",
+      "checkoutPath": "/ibv-apps/portal",
+      "mirrorPath": "/ibv-apps/git-mirror/replicas/portal.git",
+      "branch": "staging",
+      "prepareCommands": [["npm", "ci"]],
+      "testCommands": [["npm", "test"]]
+    },
+    {
+      "id": "another-app",
+      "checkoutPath": "/ibv-apps/another-app",
+      "mirrorPath": "/ibv-apps/git-mirror/replicas/another-app.git",
+      "branch": "staging",
+      "prepareCommands": [["npm", "ci"]],
+      "testCommands": [["npm", "test"]]
+    }
+  ]
+}
+```
+
+Select one repo for validation/application, or process all configured repositories
+**sequentially**. An individual failure stops that repository's deploy and does
+not stop other entries from being processed; overall exit status is nonzero if
+any entry fails.
+
+```bash
+npm run deploy -- --repo portal
+npm run deploy -- --repo portal --apply
+npm run deploy -- --all
+npm run deploy -- --all --apply
+```
+
+For backward compatibility, a legacy single-repository root config remains
+supported as `default`. When just one repository exists, `npm run deploy`
+continues to work without `--repo`. With multiple repositories, explicitly
+pass `--repo` or `--all`. `prepareCommands` and `testCommands` are argv arrays (no shell), run
 **inside the temporary candidate worktree**. For the portal example,
 `npm ci` prepares isolated dependencies and `npm test` runs its Jest suite.
 The deploy command does not start or restart PM2 applications.
 
 ```bash
-npm run deploy                           # validate only; no live checkout changes
-npm run deploy -- --apply                # validate, then update the live checkout
+npm run deploy -- --repo portal          # validate only; no live checkout changes
+npm run deploy -- --repo portal --apply  # validate, then update portal
 ```
 
 Safety behavior:
