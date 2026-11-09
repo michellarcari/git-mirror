@@ -7,3 +7,7 @@ config/client.json
 *.bundle
 *.log
 coverage/
+
+# Local corporate Git data
+replicas/
+source/
