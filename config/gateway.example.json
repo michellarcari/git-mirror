@@ -3,15 +3,21 @@
   "repositories": [
     {
       "id": "myapp",
-      "url": "https://github.enterprise.example/team/myapp.git",
-      "branch": "main",
-      "mirrorPath": "/var/lib/git-mirror/source/myapp.git"
+      "url": "git@github.enterprise.example:team/myapp.git",
+      "branches": [
+        "main",
+        "develop",
+        "release/*"
+      ],
+      "mirrorPath": "C:/git-mirror/data/myapp.git"
     }
   ],
   "clients": [
     {
       "id": "server-a",
-      "repositories": ["myapp"],
+      "repositories": [
+        "myapp"
+      ],
       "uploadBaseUrl": "https://server-a.example.com/git-mirror/",
       "tokenEnv": "SERVER_A_UPLOAD_TOKEN"
     }
