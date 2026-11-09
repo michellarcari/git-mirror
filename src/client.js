@@ -23,6 +23,9 @@ for (const repo of repos.values()) {
 const pending = new Map();
 const maxBytes = Number(config.maxBundleBytes || 2 * 1024 * 1024 * 1024);
 const intervalMs = Math.max(30000, Number(config.syncIntervalSeconds || 300) * 1000);
+const requestTimeoutMs = Math.max(30000, Number(config.requestTimeoutSeconds || 180) * 1000);
+const retryDelayMs = Math.max(5000, Number(config.retryDelaySeconds || 30) * 1000);
+const nextAttempt = new Map();
 const mq = mqtt.connect(process.env.MQTT_URL, mqttOptions());
 
 async function ensureMirror(repo) {
@@ -35,23 +38,27 @@ async function ensureMirror(repo) {
     await git(['init', '--bare', repo.mirrorPath]);
   }
 }
-async function requestSync(repo) {
-  if (!mq.connected || [...pending.values()].some(p => p.repo.id === repo.id)) return;
+async function requestSync(repo, force = false) {
+  if (!force && Date.now() < (nextAttempt.get(repo.id) || 0)) return false;
+  if (!mq.connected || [...pending.values()].some(p => p.repo.id === repo.id)) return false;
   await ensureMirror(repo);
   const patterns = branchPatterns(repo);
   const heads = Object.fromEntries(Object.entries(await listHeads(repo.mirrorPath))
     .filter(([name]) => matchesBranch(name, patterns)));
   const requestId = randomUUID();
   pending.set(requestId, { repo, created: Date.now(), uploading: false });
+  nextAttempt.set(repo.id, Date.now() + intervalMs);
   mq.publish(`${prefix}/request/${clientId}`,
     JSON.stringify({ clientId, repoId: repo.id, requestId, branches: patterns, heads }),
     { qos: 1 },
     error => {
       if (error) {
         pending.delete(requestId);
+        nextAttempt.set(repo.id, Date.now() + retryDelayMs);
         log('request.failed', { repoId: repo.id, error: error.message });
       } else log('request.sent', { repoId: repo.id, branches: patterns, requestId });
     });
+  return true;
 }
 function authorized(header) {
   if (typeof header !== 'string' || !header.startsWith('Bearer ')) return false;
@@ -85,6 +92,23 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({ ok: true, clientId }));
     return;
   }
+  if (req.method === 'POST' && /^\/v1\/sync\/[a-zA-Z0-9_-]{1,64}$/.test(req.url || '')) {
+    if (!authorized(req.headers.authorization)) { res.writeHead(401).end(); return; }
+    const repoId = req.url.split('/').at(-1);
+    const repo = repos.get(repoId);
+    if (!repo) { res.writeHead(404).end(); return; }
+    const active = [...pending.values()].some(entry => entry.repo.id === repoId);
+    if (active) { res.writeHead(409).end(JSON.stringify({ ok: false, error: 'Sync already in progress' })); return; }
+    try {
+      const submitted = await requestSync(repo, true);
+      res.writeHead(submitted ? 202 : 503, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: submitted, repoId, status: submitted ? 'requested' : 'broker_unavailable' }));
+    } catch (error) {
+      log('sync.error', { repoId, error: error.message });
+      res.writeHead(500).end();
+    }
+    return;
+  }
   if (req.method !== 'PUT' || !match) { res.writeHead(404).end(); return; }
   if (!authorized(req.headers.authorization)) { res.writeHead(401).end(); return; }
   const entry = pending.get(match[1]);
@@ -111,6 +135,7 @@ const server = http.createServer(async (req, res) => {
     if ((await stat(filename)).size !== expected) throw new Error('Incomplete transfer');
     const heads = await applyBundle(entry.repo, filename, branches);
     pending.delete(match[1]);
+    nextAttempt.set(entry.repo.id, Date.now() + intervalMs);
     log('bundle.applied', { repoId: entry.repo.id, heads, bytes: expected });
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ ok: true, heads, bytes: expected }));
@@ -123,25 +148,44 @@ const server = http.createServer(async (req, res) => {
     if (tempDir) await rm(tempDir, { recursive: true, force: true });
   }
 });
+async function sweepAndSync({ reconnect = false } = {}) {
+  for (const [id, entry] of pending) {
+    if (entry.uploading) continue;
+    if (reconnect || Date.now() - entry.created > requestTimeoutMs) {
+      pending.delete(id);
+      nextAttempt.set(entry.repo.id, 0);
+      log(reconnect ? 'request.requeued' : 'request.timed_out',
+        { repoId: entry.repo.id, requestId: id });
+    }
+  }
+  for (const repo of repos.values()) {
+    await requestSync(repo).catch(error => log('sync.error', { repoId: repo.id, error: error.message }));
+  }
+}
 mq.on('connect', () => {
-  mq.subscribe(`${prefix}/status/${clientId}`, { qos: 1 });
-  log('client.connected', { clientId });
-  for (const repo of repos.values()) void requestSync(repo).catch(error => log('sync.error', { repoId: repo.id, error: error.message }));
+  mq.subscribe(`${prefix}/status/${clientId}`, { qos: 1 }, error => {
+    if (error) { log('mqtt.subscribe_failed', { error: error.message }); return; }
+    log('client.connected', { clientId });
+    void sweepAndSync({ reconnect: true });
+  });
 });
 mq.on('message', (topic, data) => {
   try {
     const msg = JSON.parse(data.toString());
     if (topic !== `${prefix}/status/${clientId}` || !validId(msg.requestId)) return;
-    if (['completed', 'failed', 'unchanged'].includes(msg.status)) pending.delete(msg.requestId);
+    const entry = pending.get(msg.requestId);
+    if (!entry || entry.repo.id !== msg.repoId) {
+      log('status.stale', { repoId: msg.repoId, requestId: msg.requestId, status: msg.status });
+      return;
+    }
+    if (['completed', 'failed', 'unchanged'].includes(msg.status)) {
+      pending.delete(msg.requestId);
+      nextAttempt.set(entry.repo.id, Date.now() + (msg.status === 'failed' ? retryDelayMs : intervalMs));
+    }
     log('sync.status', { repoId: msg.repoId, status: msg.status, heads: msg.heads, error: msg.error });
   } catch (error) { log('status.invalid', { error: error.message }); }
 });
 mq.on('error', error => log('mqtt.error', { error: error.message }));
-setInterval(() => {
-  for (const [id, entry] of pending) {
-    if (Date.now() - entry.created > 15 * 60 * 1000 && !entry.uploading) pending.delete(id);
-  }
-  for (const repo of repos.values()) void requestSync(repo).catch(error => log('sync.error', { repoId: repo.id, error: error.message }));
-}, intervalMs).unref();
+setInterval(() => { if (mq.connected) void sweepAndSync(); }, 10000).unref();
 server.listen(config.httpPort || 8787, config.httpHost || '127.0.0.1', () =>
   log('client.started', { clientId, port: config.httpPort || 8787 }));
