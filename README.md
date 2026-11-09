@@ -8,16 +8,16 @@ The gateway can reach the private Git host **and initiate HTTPS requests to the 
 
 ## Architecture
 
-1. A client publishes a synchronization request on MQTT, including its last local commit SHA.
-2. The gateway fetches the configured branch from the Git upstream into a bare mirror.
-3. The gateway creates a Git bundle, incremental when the client commit is an ancestor of the branch head.
+1. A client publishes a synchronization request on MQTT, including the latest commit SHA of each locally mirrored branch.
+2. The gateway fetches the configured branches from the Git upstream into a bare mirror.
+3. The gateway creates a Git bundle, incremental when the client's required base commits are available.
 4. The gateway uploads the bundle to that client's dedicated HTTPS endpoint.
 5. The client verifies and imports the bundle into a local bare mirror.
 6. Applications run normal `git fetch` / `git pull` against the local mirror.
 
 MQTT carries metadata only. Git bundles travel over HTTPS. Git itself handles object integrity and history negotiation inside each bundle.
 
-**Scope (v0.1):** one branch per repository; no push from application servers to the enterprise upstream; no automatic modifications to application working trees; no tag synchronization; full bundle fallback after branch rewrites or when the client has no baseline.
+**Scope (v0.2):** multiple branches per repository, including prefix wildcard patterns such as `release/*`; no push from application servers to the enterprise upstream; no automatic modifications to application working trees; no tag synchronization; full bundle fallback after branch rewrites or when the client has no baseline.
 
 ## Requirements
 
@@ -37,7 +37,7 @@ npm ci                  # or npm install until a lockfile is committed
 cp config/gateway.example.json config/gateway.json
 ```
 
-Edit the gateway config to provide the upstream repository URL, exact branch name, local mirror path, destination clients, and their HTTPS endpoints.
+Edit the gateway config to provide the upstream repository URL, branch patterns, SSH URL, local mirror path, destination clients, and their HTTPS endpoints.
 
 Set the environment:
 
@@ -60,7 +60,7 @@ npm ci
 cp config/client.example.json config/client.json
 ```
 
-Edit `clientId`, repository IDs, mirror paths, listening port and sync interval. Set the environment:
+Edit `clientId`, repository IDs, allowed branches, mirror paths, listening port and sync interval. A client may request only the intersection of its configured branches and the gateway's allowlist. Set the environment:
 
 ```bash
 export CONFIG_PATH="$PWD/config/client.json"
@@ -90,13 +90,13 @@ Use server-level TLS, access logs, request-size limits and firewall restrictions
 
 ### Using the local mirror
 
-After the first successful synchronization:
+After the first successful synchronization, each received branch is present in the local bare mirror. The client does not automatically delete a branch that disappears from upstream. This avoids unexpected branch loss. To use one of the branches:
 
 ```bash
 # Existing application checkout; retain the corporate origin for reference.
 git -C /srv/apps/myapp remote add mirror /var/lib/git-mirror/replicas/myapp.git
 git -C /srv/apps/myapp fetch mirror
-git -C /srv/apps/myapp merge --ff-only mirror/main
+git -C /srv/apps/myapp merge --ff-only mirror/main\n# For a separate checkout tracking develop, use mirror/develop instead.
 ```
 
 If the desired behavior is literally `git pull`, configure the application checkout's upstream branch to use the local mirror remote:
@@ -119,7 +119,7 @@ Each client may publish **only** its own request topic and subscribe **only** to
 
 ## Operations
 
-- Each client requests updates at startup and every `syncIntervalSeconds` (default 300).
+- Each client requests all configured branches at startup and every `syncIntervalSeconds` (default 300).\n- One bare repository stores all branches, so branches share Git objects rather than duplicating clones.
 - The gateway runs Git fetch and bundle generation when a request arrives.
 - Transfers use HTTP PUT with a per-client bearer token and an unguessable request ID.
 - Clients accept transfers only for a currently pending request and an allowed repository.
@@ -149,6 +149,6 @@ Health checks do not imply successful upstream connectivity. Review structured J
 - Authenticate HTTP uploads and enforce size limits.
 - Corporate policy, DLP and enterprise source-code handling requirements take precedence over technical reachability.
 
-## Limitations
+## Windows gateway and SSH authentication\n\nOn the Windows VPN gateway, use a POSIX-style path such as `C:/git-mirror/data/myapp.git` in JSON and the existing authorized SSH remote such as `git@github.enterprise.example:team/myapp.git`. Verify access from the same Windows identity used to run PM2:\n\n```powershell\nssh -T git@github.enterprise.example\ngit ls-remote git@github.enterprise.example:team/myapp.git\n```\n\nUse the same Windows account (and its SSH agent, key and known_hosts configuration) for the gateway process. No enterprise SSH key is copied to any client. The legacy `branch` string continues to work as an alternative to the `branches` array. Do not configure both simultaneously. Wildcards support trailing `/*` prefixes, not arbitrary shell globbing.\n\n## Limitations
 
-This is an initial implementation, not a proven production deployment. Test with a non-sensitive repository before enabling any enterprise sync. Upstream credentials, TLS termination, ACLs, external routing, reverse-proxy size limits, and permissions are deployment-specific. Large repositories currently use local temporary bundle files. No automated workspace deploy hook, tag mirroring, resumable upload or central UI is included.
+This is an initial implementation, not a proven production deployment. Test with a non-sensitive repository before enabling any enterprise sync. Upstream credentials, TLS termination, ACLs, external routing, reverse-proxy size limits, and permissions are deployment-specific. Large repositories currently use local temporary bundle files. No automated workspace deploy hook, tag mirroring, branch pruning, resumable upload or central UI is included.
