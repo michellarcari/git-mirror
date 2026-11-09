@@ -1,0 +1,11 @@
+{
+  "checkoutPath": "/ibv-apps/portal",
+  "mirrorPath": "/ibv-apps/git-mirror/replicas/portal.git",
+  "branch": "staging",
+  "prepareCommands": [
+    ["npm", "ci"]
+  ],
+  "testCommands": [
+    ["npm", "test"]
+  ]
+}
