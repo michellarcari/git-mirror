@@ -28,18 +28,18 @@ MQTT carries metadata only. Git bundles travel over HTTPS. Git itself handles ob
 - Reverse proxy offering a valid TLS certificate for the client's upload path
 - Explicit approval to distribute the repositories to the destinations
 
-## Setup
+## Environment configuration\n\nThe gateway and client processes load an untracked `.env` file automatically through `dotenv/config`, from the process working directory. Copy `.env.example` to `.env`, then set `CONFIG_PATH`, `MIRROR_NODE_ID`, MQTT credentials and the applicable upload tokens. On the Windows gateway, use `CONFIG_PATH=config/gateway.json`, `MIRROR_NODE_ID=gateway`, and `STAGING_UPLOAD_TOKEN`, `PRODUCTION_UPLOAD_TOKEN`, `HUB_UPLOAD_TOKEN` as needed. On each Linux client, use `CONFIG_PATH=config/client.json`, a unique `MIRROR_NODE_ID`, and `UPLOAD_TOKEN` matching the gateway's token for that client. Never commit `.env`. Explicitly set process environment variables take precedence over values loaded by dotenv.\n\nWith PM2, start only the relevant application from `ecosystem.config.cjs`; its working directory is the project root. After changes to `.env`, restart that PM2 process. The project intentionally does not log or expose the tokens.\n\n## Setup
 
 ### Gateway (VPN-connected)
 
 ```bash
-npm ci                  # or npm install until a lockfile is committed
+npm install             # a lockfile has not been committed yet
 cp config/gateway.example.json config/gateway.json
 ```
 
 Edit the gateway config to provide the upstream repository URL, branch patterns, SSH URL, local mirror path, destination clients, and their HTTPS endpoints.
 
-Set the environment:
+Create `.env` from `.env.example` and set the environment values below (shown as shell exports only for reference):
 
 ```bash
 export CONFIG_PATH="$PWD/config/gateway.json"
