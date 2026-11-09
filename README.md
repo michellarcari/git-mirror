@@ -13,11 +13,11 @@ The gateway can reach the private Git host **and initiate HTTPS requests to the 
 3. The gateway creates a Git bundle, incremental when the client's required base commits are available.
 4. The gateway uploads the bundle to that client's dedicated HTTPS endpoint.
 5. The client verifies and imports the bundle into a local bare mirror.
-6. Applications run normal `git fetch` / `git pull` against the local mirror.
+6. Applications can fetch or pull from the local mirror when their histories permit; checkouts with local commits can use the separately validated deploy command.
 
 MQTT carries metadata only. Git bundles travel over HTTPS. Git itself handles object integrity and history negotiation inside each bundle.
 
-**Scope (v0.3):** multiple branches per repository, including prefix wildcard patterns such as `release/*`; no push from application servers to the enterprise upstream; no automatic modifications to application working trees; no tag synchronization; full bundle fallback after branch rewrites or when the client has no baseline.
+**Scope (v0.3):** multiple branches per repository, including prefix wildcard patterns such as `release/*`; no push from application servers to the enterprise upstream; no unattended modifications to application working trees; no tag synchronization; full bundle fallback after branch rewrites or when the client has no baseline.
 
 ## Requirements
 
@@ -115,6 +115,60 @@ git -C /srv/apps/myapp pull --ff-only
 
 Do not use a force reset during deploy; `--ff-only` prevents silently discarding local commits.
 
+
+### Validated deployment for application branches with local commits
+
+An application checkout can contain server-specific commits that are not in the corporate
+mirror. In that case, `git pull --ff-only` cannot reliably apply subsequent updates.
+The **optional manual deploy command** builds and tests a merge in an isolated Git
+worktree, then fast-forwards the active application branch to the validated result.
+The MQTT client itself still updates only the bare replica.
+
+Create a local deploy config on the Linux application server:
+
+```bash
+cd /ibv-apps/git-mirror
+cp config/deploy.example.json config/deploy.json
+```
+
+The staging example uses `/ibv-apps/portal`, branch `staging`, and
+`/ibv-apps/git-mirror/replicas/portal.git`. Adjust paths and commands for other
+servers. `prepareCommands` and `testCommands` are argv arrays (no shell), run
+**inside the temporary candidate worktree**. For the portal example,
+`npm ci` prepares isolated dependencies and `npm test` runs its Jest suite.
+The deploy command does not start or restart PM2 applications.
+
+```bash
+npm run deploy                           # validate only; no live checkout changes
+npm run deploy -- --apply                # validate, then update the live checkout
+```
+
+Safety behavior:
+
+- Requires the expected branch checked out and a clean tracked/untracked working tree.
+  Ignored files (for example runtime data or dependencies) are not touched.
+- Fetches the configured branch from the **local bare mirror path** only; verifies
+  that the checkout's `mirror` remote points to the same path.
+- Creates a detached candidate worktree at the current application HEAD, merges the
+  mirrored branch there, and runs the configured preparation and test commands.
+- On conflicts or failed tests, stops without updating the live application checkout.
+  Resolve the conflict intentionally on the application branch and retry.
+- On success with `--apply`, records the old HEAD in
+  `refs/git-mirror-backups/<branch>/<timestamp>` and fast-forwards the active
+  checkout to the tested candidate. The operation creates a local merge commit when
+  required, but **does not push upstream or modify the bare mirror**.
+- If `mirror/staging` is already an ancestor of the application branch, reports
+  `deploy.unchanged`.
+- Never discards application commits, performs a force reset, or reapplies a stash.
+
+This is **validated merge deployment**, not a guarantee of conflict-free automatic
+deployment. New changes touching the same customizations can still conflict; stop and
+review rather than taking one side automatically. The temporary worktree has no ignored
+runtime assets or untracked secrets from the live checkout; use tests that can run in
+this isolated environment. Before any production use, validate the complete application
+and arrange process restarts or service switching separately. Do not run concurrently
+with other checkout mutations or deployments.
+
 ## MQTT topics
 
 ```text
@@ -204,4 +258,4 @@ Use the same Windows account (and its SSH agent, key and known_hosts configurati
 
 ## Limitations
 
-This is an initial implementation, not a proven production deployment. Test with a non-sensitive repository before enabling any enterprise sync. Upstream credentials, TLS termination, ACLs, external routing, reverse-proxy size limits, and permissions are deployment-specific. Large repositories currently use local temporary bundle files. No automated workspace deploy hook, tag mirroring, branch pruning, resumable upload or central UI is included.
+This is an initial implementation, not a proven production deployment. Test with a non-sensitive repository before enabling any enterprise sync. Upstream credentials, TLS termination, ACLs, external routing, reverse-proxy size limits, and permissions are deployment-specific. Large repositories currently use local temporary bundle files. No unattended workspace deploy hook, tag mirroring, branch pruning, resumable upload or central UI is included.
