@@ -17,7 +17,7 @@ The gateway can reach the private Git host **and initiate HTTPS requests to the 
 
 MQTT carries metadata only. Git bundles travel over HTTPS. Git itself handles object integrity and history negotiation inside each bundle.
 
-**Scope (v0.2):** multiple branches per repository, including prefix wildcard patterns such as `release/*`; no push from application servers to the enterprise upstream; no automatic modifications to application working trees; no tag synchronization; full bundle fallback after branch rewrites or when the client has no baseline.
+**Scope (v0.3):** multiple branches per repository, including prefix wildcard patterns such as `release/*`; no push from application servers to the enterprise upstream; no automatic modifications to application working trees; no tag synchronization; full bundle fallback after branch rewrites or when the client has no baseline.
 
 ## Requirements
 
@@ -28,7 +28,13 @@ MQTT carries metadata only. Git bundles travel over HTTPS. Git itself handles ob
 - Reverse proxy offering a valid TLS certificate for the client's upload path
 - Explicit approval to distribute the repositories to the destinations
 
-## Environment configuration\n\nThe gateway and client processes load an untracked `.env` file automatically through `dotenv/config`, from the process working directory. Copy `.env.example` to `.env`, then set `CONFIG_PATH`, `MIRROR_NODE_ID`, MQTT credentials and the applicable upload tokens. On the Windows gateway, use `CONFIG_PATH=config/gateway.json`, `MIRROR_NODE_ID=gateway`, and `STAGING_UPLOAD_TOKEN`, `PRODUCTION_UPLOAD_TOKEN`, `HUB_UPLOAD_TOKEN` as needed. On each Linux client, use `CONFIG_PATH=config/client.json`, a unique `MIRROR_NODE_ID`, and `UPLOAD_TOKEN` matching the gateway's token for that client. Never commit `.env`. Explicitly set process environment variables take precedence over values loaded by dotenv.\n\nWith PM2, start only the relevant application from `ecosystem.config.cjs`; its working directory is the project root. After changes to `.env`, restart that PM2 process. The project intentionally does not log or expose the tokens.\n\n## Setup
+## Environment configuration
+
+The gateway and client processes load an untracked `.env` file automatically through `dotenv/config`, from the process working directory. Copy `.env.example` to `.env`, then set `CONFIG_PATH`, `MIRROR_NODE_ID`, MQTT credentials and the applicable upload tokens. On the Windows gateway, use `CONFIG_PATH=config/gateway.json`, `MIRROR_NODE_ID=gateway`, and `STAGING_UPLOAD_TOKEN`, `PRODUCTION_UPLOAD_TOKEN`, `HUB_UPLOAD_TOKEN` as needed. On each Linux client, use `CONFIG_PATH=config/client.json`, a unique `MIRROR_NODE_ID`, and `UPLOAD_TOKEN` matching the gateway's token for that client. Never commit `.env`. Explicitly set process environment variables take precedence over values loaded by dotenv.
+
+With PM2, start only the relevant application from `ecosystem.config.cjs`; its working directory is the project root. After changes to `.env`, restart that PM2 process. The project intentionally does not log or expose the tokens.
+
+## Setup
 
 ### Gateway (VPN-connected)
 
@@ -96,7 +102,8 @@ After the first successful synchronization, each received branch is present in t
 # Existing application checkout; retain the corporate origin for reference.
 git -C /srv/apps/myapp remote add mirror /var/lib/git-mirror/replicas/myapp.git
 git -C /srv/apps/myapp fetch mirror
-git -C /srv/apps/myapp merge --ff-only mirror/main\n# For a separate checkout tracking develop, use mirror/develop instead.
+git -C /srv/apps/myapp merge --ff-only mirror/main
+# For a separate checkout tracking develop, use mirror/develop instead.
 ```
 
 If the desired behavior is literally `git pull`, configure the application checkout's upstream branch to use the local mirror remote:
@@ -117,15 +124,53 @@ git-mirror/v1/status/<clientId>
 
 Each client may publish **only** its own request topic and subscribe **only** to its own status topic. The gateway subscribes to authorized request topics and publishes statuses. Use TLS and unique broker credentials per node; disable anonymous access and MQTT retained requests.
 
+## Resilient request lifecycle
+
+Each client tracks outstanding requests by request ID. A watchdog runs every 10 seconds.
+If a request has no terminal response after `requestTimeoutSeconds` (default 180),
+it is marked `request.timed_out`, removed from the pending set, and a fresh request is published.
+After a broker reconnection the client re-queues pending requests that are not actively uploading.
+A reported failure is retried after `retryDelaySeconds` (default 30);
+successful/unchanged requests respect `syncIntervalSeconds` (default 300).
+Incoming late responses for previous request IDs are ignored and logged as `status.stale`.
+Active uploads are not expired by the watchdog.
+
+Example optional settings in `config/client.json`:
+
+```json
+{
+  "requestTimeoutSeconds": 180,
+  "retryDelaySeconds": 30,
+  "syncIntervalSeconds": 300
+}
+```
+
+Run a manual request from the client project directory without restarting PM2:
+
+```bash
+npm run sync -- portal
+```
+
+This sends an authenticated request to the client's local Node.js API. It returns
+HTTP 202 when the request is queued, HTTP 409 when one is already pending and HTTP 503
+when MQTT is unavailable; it does not wait for bundle delivery.
+The control endpoint `POST /v1/sync/<repoId>` requires the client's UPLOAD_TOKEN;
+restrict external reverse proxy paths to uploads only (e.g. `location /git-mirror/v1/upload/`)
+and do not publish the manual-sync endpoint.
+
+Gateway log events include `sync.requested`, `sync.started`, `sync.upstream`,
+`sync.completed` and `sync.failed`, with a request ID for correlation.
+
 ## Operations
 
-- Each client requests all configured branches at startup and every `syncIntervalSeconds` (default 300).\n- One bare repository stores all branches, so branches share Git objects rather than duplicating clones.
+- Each client requests its configured branches at startup, at the scheduled interval, and automatically after timeouts/reconnections.
+- One bare repository stores all branches, so branches share Git objects rather than duplicating clones.
 - The gateway runs Git fetch and bundle generation when a request arrives.
 - Transfers use HTTP PUT with a per-client bearer token and an unguessable request ID.
 - Clients accept transfers only for a currently pending request and an allowed repository.
 - Clients run `git bundle verify` before importing the changes.
 - A completed sync updates only the local bare mirror, not a working tree.
-- Failed syncs are retried at the next interval, not in an unbounded busy loop.
+- Failed syncs use a bounded retry delay; pending requests are monitored for timeouts.
 - PM2 process examples are in `ecosystem.config.cjs`.
 
 ### Diagnostics
@@ -149,6 +194,14 @@ Health checks do not imply successful upstream connectivity. Review structured J
 - Authenticate HTTP uploads and enforce size limits.
 - Corporate policy, DLP and enterprise source-code handling requirements take precedence over technical reachability.
 
-## Windows gateway and SSH authentication\n\nOn the Windows VPN gateway, use a POSIX-style path such as `C:/git-mirror/data/myapp.git` in JSON and the existing authorized SSH remote such as `git@github.enterprise.example:team/myapp.git`. Verify access from the same Windows identity used to run PM2:\n\n```powershell\nssh -T git@github.enterprise.example\ngit ls-remote git@github.enterprise.example:team/myapp.git\n```\n\nUse the same Windows account (and its SSH agent, key and known_hosts configuration) for the gateway process. No enterprise SSH key is copied to any client. The legacy `branch` string continues to work as an alternative to the `branches` array. Do not configure both simultaneously. Wildcards support trailing `/*` prefixes, not arbitrary shell globbing.\n\n## Limitations
+## Windows gateway and SSH authentication
+
+On the Windows VPN gateway, use a POSIX-style path such as `C:/git-mirror/data/myapp.git` in JSON and the existing authorized SSH remote such as `git@github.enterprise.example:team/myapp.git`. Verify access from the same Windows identity used to run PM2:
+
+```powershell\nssh -T git@github.enterprise.example\ngit ls-remote git@github.enterprise.example:team/myapp.git\n```
+
+Use the same Windows account (and its SSH agent, key and known_hosts configuration) for the gateway process. No enterprise SSH key is copied to any client. The legacy `branch` string continues to work as an alternative to the `branches` array. Do not configure both simultaneously. Wildcards support trailing `/*` prefixes, not arbitrary shell globbing.
+
+## Limitations
 
 This is an initial implementation, not a proven production deployment. Test with a non-sensitive repository before enabling any enterprise sync. Upstream credentials, TLS termination, ACLs, external routing, reverse-proxy size limits, and permissions are deployment-specific. Large repositories currently use local temporary bundle files. No automated workspace deploy hook, tag mirroring, branch pruning, resumable upload or central UI is included.
