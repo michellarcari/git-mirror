@@ -8,7 +8,10 @@
   "repositories": [
     {
       "id": "myapp",
-      "branch": "main",
+      "branches": [
+        "main",
+        "develop"
+      ],
       "mirrorPath": "/var/lib/git-mirror/replicas/myapp.git"
     }
   ]
