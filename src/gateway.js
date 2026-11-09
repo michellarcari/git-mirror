@@ -84,10 +84,13 @@ async function processRequest(message) {
     JSON.stringify({ requestId, repoId, status, ...extra }),
     { qos: 1 }
   );
+  log('sync.requested', { clientId, repoId, requestId, branches: requested });
   const work = async () => {
     let dir;
+    log('sync.started', { clientId, repoId, requestId });
     try {
       const all = await updateMirror(repo);
+      log('sync.upstream', { clientId, repoId, requestId, branchCount: Object.keys(all).length });
       const allowed = branchPatterns(repo);
       const heads = Object.fromEntries(Object.entries(all).filter(([name]) =>
         matchesBranch(name, allowed) && matchesBranch(name, requested)));
@@ -125,10 +128,10 @@ async function processRequest(message) {
       await git(args, { cwd: repo.mirrorPath, timeout: 600000 });
       const result = await upload(client, requestId, bundle, repoId, Object.keys(heads));
       publish('completed', { heads, incremental, result });
-      log('sync.completed', { clientId, repoId, heads, incremental });
+      log('sync.completed', { clientId, repoId, requestId, heads, incremental });
     } catch (error) {
       publish('failed', { error: error.message });
-      log('sync.failed', { clientId, repoId, error: error.message });
+      log('sync.failed', { clientId, repoId, requestId, error: error.message });
     } finally {
       if (dir) await rm(dir, { recursive: true, force: true });
     }
