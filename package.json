@@ -1,6 +1,6 @@
 {
   "name": "git-mirror",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Push-only Git mirror distribution over HTTPS coordinated by MQTT",
@@ -13,6 +13,7 @@
     "test": "node --test"
   },
   "dependencies": {
+    "dotenv": "^16.6.1",
     "mqtt": "^5.15.0"
   }
 }
