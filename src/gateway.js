@@ -104,13 +104,21 @@ async function processRequest(message) {
       // Only use incremental transfer when every supplied base is available and ancestral.
       const bases = [...new Set(Object.entries(have)
         .filter(([name]) => name in heads).map(([, sha]) => sha).filter(Boolean))];
-      let incremental = bases.length > 0;
+      let incremental = bases.length > 0 && Object.keys(heads).every(name => Boolean(have[name]));
       for (const base of bases) {
         const exists = await git(['cat-file', '-e', `${base}^{commit}`], { cwd: repo.mirrorPath }).then(() => true, () => false);
         if (!exists) { incremental = false; break; }
       }
-      // A missing base for any branch is allowed, but base exclusions must not prevent
-      // constructing other branches. Bundle verification on the client is authoritative.
+      if (incremental) {
+        for (const [name, sha] of Object.entries(have)) {
+          if (!(name in heads) || !sha) continue;
+          const isAncestor = await git(['merge-base', '--is-ancestor', sha, heads[name]],
+            { cwd: repo.mirrorPath }).then(() => true, () => false);
+          if (!isAncestor) { incremental = false; break; }
+        }
+      }
+      // A new branch or rewritten history requires a complete bundle.
+      // The client verifies prerequisites before importing incremental bundles.
       const args = ['bundle', 'create', bundle, ...refs];
       if (incremental) args.push(...bases.map(sha => `^${sha}`));
       await git(args, { cwd: repo.mirrorPath, timeout: 600000 });
