@@ -25,10 +25,12 @@ test('dynamic resolver is restricted to configured organizations', () => {
   assert.throws(() => resolveDynamicRepository('IBV-IBM/portal', { ...gateway, sshHost: 'github.ibm.com;bad' },
     { cacheDirectory: root }), /Invalid dynamic/);
 });
-test('administrator bearer token is distinct and requires 24+ characters', () => {
+test('administrator bearer token is distinct and requires 16+ characters', () => {
   const token = 'very-long-distinct-admin-token';
   assert.equal(bearerAuthorized('Bearer ' + token, token), true);
   assert.equal(bearerAuthorized('Bearer incorrect', token), false);
+  assert.equal(bearerAuthorized('Bearer 1234567890abcdef', '1234567890abcdef'), true);
+  assert.equal(bearerAuthorized('Bearer 1234567890abcde', '1234567890abcde'), false);
   assert.equal(bearerAuthorized('Bearer abc', 'abc'), false);
   assert.equal(bearerAuthorized('', token), false);
 });
