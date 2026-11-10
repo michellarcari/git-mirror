@@ -49,7 +49,7 @@ export function validHeads(heads) {
 export async function git(args, { cwd, timeout = 180000 } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn('git', args, {
-      cwd, shell: false,
+      cwd, shell: false, windowsHide: true,
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
       stdio: ['ignore', 'pipe', 'pipe']
     });
