@@ -46,7 +46,7 @@ if (all) {
     try {
       await new Promise((resolve, reject) => {
         const args = [script, '--config', configPath, '--repo', repo.id, ...(apply ? ['--apply'] : [])];
-        const child = spawn(process.execPath, args, { stdio: 'inherit', shell: false });
+        const child = spawn(process.execPath, args, { stdio: 'inherit', shell: false, windowsHide: true });
         child.once('error', reject);
         child.once('exit', (code, signal) => code === 0 ? resolve() :
           reject(new Error(`Deploy failed for ${repo.id} (exit ${code}, signal ${signal || 'none'})`)));
@@ -78,7 +78,7 @@ if (all) {
 async function run(program, commandArgs, cwd, timeoutMs = 600000) {
   return new Promise((resolve, reject) => {
     const child = spawn(program, commandArgs, {
-      cwd, shell: false, stdio: ['ignore', 'pipe', 'pipe'],
+      cwd, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_EDITOR: 'true' }
     });
     let stdout = '', stderr = '';
