@@ -1,6 +1,6 @@
 # Dynamic Repository Mirroring and Client Administration — Technical Design
 
-**Status:** Approved design; not yet implemented  
+**Status:** Partially implemented; staging rollout required  
 **Language:** English (US)  
 **Last updated:** 2026-11-10  
 **Scope:** Gateway and client configuration, repository discovery, dynamic branch mirroring, single-token client UI, and validated local deployments.
@@ -303,10 +303,14 @@ For runtime configuration edits, explicitly define which fields can be reloaded 
 | MQTT-triggered Git bundle distribution | Implemented |
 | Multi-repository client mirrors | Implemented |
 | Manual validated multi-repository deploy command | Implemented (requires end-to-end environment validation) |
-| Dynamic repository requests restricted by organization | **Design only** |
-| Enterprise branch discovery via gateway | **Design only** |
-| Gateway dynamic cache keyed by canonical repo | **Design only** |
-| Runtime subscription configuration API | **Design only** |
-| Client single-token admin UI | **Design only** |
-| Admin-triggered validated deployment API | **Design only** |
+| Dynamic repository requests restricted by organization | Implemented in code; integration validation pending |
+| Enterprise branch discovery via gateway | Implemented via asynchronous MQTT; integration validation pending |
+| Gateway dynamic cache keyed by canonical repo | Implemented in code; integration validation pending |
+| Runtime subscription configuration API | Add/edit branch selection/remove implemented |
+| Client single-token admin UI | Basic UI implemented; integration validation pending |
+| Admin-triggered validated deployment API | **Not implemented**; CLI remains available |
 | Reverse push/publication to Enterprise | **Explicitly out of scope** |
+
+### Implementation note (2026-11-10)
+
+The initial code for organization-scoped dynamic upstream resolution, MQTT branch discovery, client subscription persistence, and a token-authenticated client page has been committed. The present UI is a minimal administration page, not the entire target feature set. It does not yet expose deployment operations, general settings editing, or an enterprise repository search catalog. The gateway feature is disabled unless `dynamicRepositories.enabled` is true. This implementation has not been verified end-to-end on the Windows/VPN/NGINX deployment and should be rolled out to staging before production. See the README for the currently supported routes and configuration instructions.
