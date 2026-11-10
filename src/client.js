@@ -154,6 +154,9 @@ const server = http.createServer(async (req, res) => {
       }
       if (req.method === 'POST' && route === 'repositories') {
         const next = validateSubscription(await readJson(req), config, [...repos.values()]);
+        if ((config.repositories || []).length >= 100) {
+          sendJson(res, 409, { error: 'Repository limit reached' }); return;
+        }
         const nextConfig = { ...config, repositories: [...repos.values(), next] };
         await saveClientConfig(process.env.CONFIG_PATH, nextConfig);
         config.repositories = nextConfig.repositories;
@@ -185,6 +188,23 @@ const server = http.createServer(async (req, res) => {
         if (req.method === 'POST' && repoMatch[2] === '/sync') {
           const result = await requestSync(repo, true);
           sendJson(res, result ? 202 : 409, { ok: result, repoId: repo.id });
+          return;
+        }
+        if (req.method === 'PATCH' && !repoMatch[2]) {
+          if ([...pending.values()].some(entry => entry.repo.id === repo.id)) {
+            sendJson(res, 409, { error: 'Synchronization is pending' }); return;
+          }
+          const body = await readJson(req);
+          const branches = branchPatterns({ id: repo.id, branches: body.branches });
+          const updated = { ...repo, branches };
+          const nextConfig = { ...config, repositories: [...repos.values()].map(item =>
+            item.id === repo.id ? updated : item) };
+          await saveClientConfig(process.env.CONFIG_PATH, nextConfig);
+          config.repositories = nextConfig.repositories;
+          repos.set(repo.id, updated);
+          nextAttempt.set(repo.id, 0);
+          record('repository.updated', { repoId: repo.id });
+          sendJson(res, 200, { repository: updated });
           return;
         }
         if (req.method === 'DELETE' && !repoMatch[2]) {
