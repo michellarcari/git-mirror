@@ -3,6 +3,7 @@ import mqtt from 'mqtt';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { resolveDynamicRepository } from './dynamic.js';
 import { loadConfig, mqttOptions, validId, validSha, validHeads, branchPatterns, matchesBranch, git, listHeads, ensureParent, log } from './common.js';
@@ -12,6 +13,7 @@ const prefix = config.topicPrefix || 'git-mirror/v1';
 const repositories = new Map((config.repositories || []).map(r => [r.id, r]));
 const clients = new Map((config.clients || []).map(c => [c.id, c]));
 const locks = new Map();
+const gatewayBootId = randomUUID();
 for (const repo of repositories.values()) {
   if (!validId(repo.id) || !path.isAbsolute(repo.mirrorPath) || !repo.url) {
     throw new Error('Invalid gateway repository configuration');
@@ -168,8 +170,16 @@ async function processRequest(message) {
 
 const mq = mqtt.connect(process.env.MQTT_URL, mqttOptions());
 mq.on('connect', () => {
-  mq.subscribe(`${prefix}/request/+`, { qos: 1 });
-  log('gateway.connected');
+  mq.subscribe(`${prefix}/request/+`, { qos: 1 }, error => {
+    if (error) {
+      log('gateway.subscribe_failed', { error: error.message });
+      return;
+    }
+    mq.publish(`${prefix}/gateway/presence`, JSON.stringify({
+      status: 'online', bootId: gatewayBootId
+    }), { qos: 1, retain: true });
+    log('gateway.connected', { bootId: gatewayBootId });
+  });
 });
 mq.on('message', (topic, payload) => {
   try {
