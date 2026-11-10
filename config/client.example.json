@@ -14,5 +14,6 @@
       ],
       "mirrorPath": "/var/lib/git-mirror/replicas/myapp.git"
     }
-  ]
+  ],
+  "mirrorRoot": "/var/lib/git-mirror/replicas"
 }
