@@ -214,6 +214,125 @@ this isolated environment. Before any production use, validate the complete appl
 and arrange process restarts or service switching separately. Do not run concurrently
 with other checkout mutations or deployments.
 
+
+## Dynamic organization-scoped mirroring (opt-in preview)
+
+The gateway and client now support adding repositories through the client administration UI.
+**Deploy from the UI is not implemented.** The existing `npm run deploy` command remains
+manual. This feature has unit tests, but has not been end-to-end validated against the
+enterprise VPN, broker, NGINX and deployed clients; enable it on staging first.
+
+### Gateway setup (Windows, update gateway first)
+
+Keep the current `clients` registry with client IDs, HTTPS upload endpoints and
+`tokenEnv` references. This registry is required for message delivery; **do not**
+configure per-client repository restrictions for dynamic repositories.
+
+Extend the existing `config/gateway.json` with:
+
+```json
+{
+  "github": {
+    "sshHost": "github.ibm.com",
+    "allowedOrganizations": ["IBV-IBM"]
+  },
+  "dynamicRepositories": {
+    "enabled": true,
+    "cacheDirectory": "C:/ibv-apps/git-mirror/source"
+  }
+}
+```
+
+Merge these keys into your current JSON rather than replacing its MQTT and client settings.
+Keep existing `repositories` for legacy subscriptions during migration.
+The gateway constructs `git@github.ibm.com:ORG/REPO.git` itself; it never accepts
+arbitrary remote URLs from clients. Every registered client may request any repository
+under the organizations listed above (including private repositories that the gateway
+SSH identity can access). This is an intentionally broad authorization grant.
+Obtain organization security approval before enabling it.
+
+### Client setup (Linux, after gateway deployment)
+
+Set `ADMIN_TOKEN` in the client's `.env` to a random secret of at least 24 characters.
+Keep the separate existing `UPLOAD_TOKEN`. Add a trusted writable local storage root
+in the client's `config/client.json`:
+
+```json
+{
+  "mirrorRoot": "/ibv-apps/git-mirror/replicas"
+}
+```
+
+Merge this key into the existing JSON. Existing subscriptions remain unchanged.
+The UI derives paths beneath `mirrorRoot` for new subscriptions and stores a
+canonical `upstream` value such as `IBV-IBM/portal`. Config is saved atomically
+to `CONFIG_PATH`, and added/removed/updated subscriptions take effect in memory
+without restarting the client. Do not expose the upload token to the browser.
+
+Restart the existing PM2 processes after pulling the updated code and editing
+environment/configuration:
+
+```bash
+pm2 restart github-gateway
+# On each Linux client:
+pm2 restart github-client
+```
+
+Use the real PM2 process names installed on each machine if they differ.
+
+### HTTPS / NGINX
+
+Expose only these paths on each client's HTTPS virtual host:
+
+```nginx
+location /git-mirror/admin/ {
+    proxy_pass http://127.0.0.1:8787/admin/;
+}
+location /git-mirror/v1/admin/ {
+    client_max_body_size 64k;
+    proxy_pass http://127.0.0.1:8787/v1/admin/;
+}
+location /git-mirror/v1/upload/ {
+    client_max_body_size 2g;
+    proxy_request_buffering off;
+    proxy_read_timeout 600s;
+    proxy_send_timeout 600s;
+    proxy_pass http://127.0.0.1:8787/v1/upload/;
+}
+```
+
+The UI is then served at `https://YOUR-CLIENT-HOST/git-mirror/admin/`.
+The page itself contains no credentials; administrative API requests require
+`Authorization: Bearer ADMIN_TOKEN`. The token is kept only in the current browser
+page's memory and must be re-entered after refresh. HTTPS is mandatory outside loopback.
+Do not publish `/v1/sync/:repoId`, `/health` or the Node HTTP port publicly.
+
+### Current UI/API functionality
+
+- Status, MQTT connectivity, pending count and a bounded list of recent client events
+- View local repositories and branch subscriptions
+- Add an `organization/repository` subscription with a safe locally derived bare path
+- Edit branch patterns on an existing subscription
+- Remove a subscription without deleting its Git data
+- Request immediate synchronization for a subscribed repository
+- Request branch discovery for a known `organization/repository` and inspect the result in activity
+
+Discovery is asynchronous over MQTT. It requires a gateway with dynamic mirroring
+enabled and does not provide an organization-wide GitHub repository catalog.
+Gateway SSH access must be configured for the organization and repository.
+
+The admin API is `GET /v1/admin/status`, `GET /v1/admin/repositories`,
+`GET /v1/admin/activity`, `POST /v1/admin/discover`,
+`POST /v1/admin/repositories`, `PATCH /v1/admin/repositories/:id`,
+`DELETE /v1/admin/repositories/:id`, and
+`POST /v1/admin/repositories/:id/sync`.
+
+**Important:** The UI does not yet support deployment initiation, editing global
+client settings, or server-side enterprise repository listing by organization.
+Do not switch existing staged applications to automatic deployment. Existing
+manual deployment commands continue to work.
+
+
 ## MQTT topics
 
 ```text
