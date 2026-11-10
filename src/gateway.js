@@ -4,6 +4,7 @@ import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createReadStream } from 'node:fs';
+import { resolveDynamicRepository } from './dynamic.js';
 import { loadConfig, mqttOptions, validId, validSha, validHeads, branchPatterns, matchesBranch, git, listHeads, ensureParent, log } from './common.js';
 
 const config = await loadConfig();
@@ -18,7 +19,7 @@ for (const repo of repositories.values()) {
   branchPatterns(repo);
 }
 for (const client of clients.values()) {
-  if (!validId(client.id) || !Array.isArray(client.repositories) ||
+  if (!validId(client.id) || (client.repositories !== undefined && !Array.isArray(client.repositories)) ||
       !/^https:\/\//.test(client.uploadBaseUrl) || !client.tokenEnv) {
     throw new Error('Invalid gateway client configuration');
   }
@@ -71,14 +72,29 @@ async function processRequest(message) {
   const { clientId, repoId, requestId } = message;
   if (!validId(clientId) || !validId(repoId) || !validId(requestId)) return;
   const client = clients.get(clientId);
-  const repo = repositories.get(repoId);
-  if (!client || !repo || !client.repositories.includes(repoId)) return;
+  if (!client) return;
+  const dynamic = config.dynamicRepositories?.enabled === true;
+  let repo;
+  try {
+    if (dynamic && typeof message.upstream === 'string') {
+      repo = resolveDynamicRepository(message.upstream, config.github, config.dynamicRepositories);
+    } else {
+      repo = repositories.get(repoId);
+      if (!repo || (Array.isArray(client.repositories) && !client.repositories.includes(repoId))) return;
+    }
+  } catch (error) {
+    log('request.denied', { clientId, repoId, error: error.message });
+    mq.publish(`${prefix}/status/${clientId}`,
+      JSON.stringify({ requestId, repoId, status: 'failed', error: 'Repository request denied' }), { qos: 1 });
+    return;
+  }
   const have = message.heads || (validSha(message.have) ? { [repo.branch]: message.have } : {});
   if (!validHeads(have)) return;
-  const requested = message.branches || branchPatterns(repo);
-  if (!Array.isArray(requested) || !requested.length || requested.length > 100 ||
+  const discover = message.action === 'discover';
+  const requested = discover ? ['*'] : (message.branches || branchPatterns(repo));
+  if (!discover && (!Array.isArray(requested) || !requested.length || requested.length > 100 ||
       !requested.every(p => typeof p === 'string' &&
-        (branchPatterns({ id: repoId, branches: [p] }), true))) return;
+        (branchPatterns({ id: repoId, branches: [p] }), true)))) return;
   const publish = (status, extra = {}) => mq.publish(
     `${prefix}/status/${clientId}`,
     JSON.stringify({ requestId, repoId, status, ...extra }),
@@ -90,6 +106,10 @@ async function processRequest(message) {
     log('sync.started', { clientId, repoId, requestId });
     try {
       const all = await updateMirror(repo);
+      if (discover) {
+        publish('discovered', { branches: Object.keys(all).sort() });
+        return;
+      }
       log('sync.upstream', { clientId, repoId, requestId, branchCount: Object.keys(all).length });
       const allowed = branchPatterns(repo);
       const heads = Object.fromEntries(Object.entries(all).filter(([name]) =>
@@ -136,10 +156,11 @@ async function processRequest(message) {
       if (dir) await rm(dir, { recursive: true, force: true });
     }
   };
-  const previous = locks.get(repoId) || Promise.resolve();
+  const lockId = repo.mirrorPath;
+  const previous = locks.get(lockId) || Promise.resolve();
   const current = previous.catch(() => {}).then(work);
-  locks.set(repoId, current);
-  current.finally(() => { if (locks.get(repoId) === current) locks.delete(repoId); });
+  locks.set(lockId, current);
+  current.finally(() => { if (locks.get(lockId) === current) locks.delete(lockId); });
 }
 
 const mq = mqtt.connect(process.env.MQTT_URL, mqttOptions());
