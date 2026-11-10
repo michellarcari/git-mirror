@@ -21,5 +21,15 @@
       "uploadBaseUrl": "https://server-a.example.com/git-mirror/",
       "tokenEnv": "SERVER_A_UPLOAD_TOKEN"
     }
-  ]
+  ],
+  "github": {
+    "sshHost": "github.enterprise.example",
+    "allowedOrganizations": [
+      "team"
+    ]
+  },
+  "dynamicRepositories": {
+    "enabled": false,
+    "cacheDirectory": "C:/git-mirror/source"
+  }
 }
