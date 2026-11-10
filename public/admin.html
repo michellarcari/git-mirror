@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Git Mirror · Client Admin</title>
+<style>
+:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color-scheme:dark;background:#101722;color:#e5eaf3}
+*{box-sizing:border-box}body{margin:0;min-height:100vh}main{max-width:940px;margin:0 auto;padding:32px 20px}
+h1{font-size:1.65rem;margin:0 0 6px}.muted{color:#9daabd;font-size:.9rem}section{border:1px solid #303e52;background:#192331;border-radius:14px;padding:20px;margin-top:18px}
+label{display:block;color:#b8c6d9;font-size:.85rem;margin:12px 0 6px}
+input{width:100%;padding:11px 12px;border:1px solid #42536b;border-radius:8px;background:#101722;color:inherit;font:inherit}
+button{border:0;background:#477cf4;color:white;border-radius:8px;padding:10px 14px;cursor:pointer;font-weight:600}
+button:disabled{opacity:.55;cursor:default}.secondary{background:#36475f}.danger{background:#93434e}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.grow{flex:1}.hidden{display:none}
+article{border:1px solid #344359;border-radius:10px;padding:14px;margin-top:10px}
+.name{font-weight:700}.pill{padding:4px 8px;background:#29394f;border-radius:50px;font-size:.75rem}
+code{font-size:.86rem;overflow-wrap:anywhere}pre{white-space:pre-wrap;max-height:220px;overflow:auto;color:#b7c8dd}
+#message{min-height:24px;margin-top:10px;color:#c6d8f8}
+@media(max-width:600px){main{padding:20px 12px}section{padding:16px}}
+</style>
+</head>
+<body>
+<main>
+<header><h1>Git Mirror</h1><div class="muted">Client administration · Repository synchronization</div></header>
+<section id="auth"><h2>Access token</h2><label for="token">ADMIN_TOKEN</label>
+<input id="token" type="password" autocomplete="off" placeholder="Enter your administrator token">
+<div class="row" style="margin-top:14px"><button id="connect">Connect</button></div>
+</section>
+<div id="dashboard" class="hidden">
+<section><div class="row"><h2 class="grow">Status</h2><button id="refresh" class="secondary">Refresh</button></div>
+<div id="status" class="muted">Loading...</div></section>
+<section><h2>Repositories</h2><div id="repositories"></div></section>
+<section><h2>Add repository</h2>
+<label for="repo-id">Local ID</label><input id="repo-id" placeholder="portal">
+<label for="repo-upstream">Enterprise repository</label><input id="repo-upstream" placeholder="IBV-IBM/portal">
+<label for="repo-branches">Branches (comma-separated)</label><input id="repo-branches" value="staging" placeholder="main, staging, release/*">
+<div class="row" style="margin-top:15px"><button id="discover" class="secondary">Discover branches</button>
+<button id="add">Add repository</button></div><div id="branches-result" class="muted"></div>
+</section>
+<section><h2>Recent activity</h2><pre id="activity">No events yet.</pre></section>
+</div>
+<div id="message" role="status"></div>
+</main>
+<script>
+(() => {
+  'use strict';
+  let token = '';
+  const $ = id => document.getElementById(id);
+  const message = text => { $('message').textContent = text || ''; };
+  const api = async (endpoint, method = 'GET', body) => {
+    const response = await fetch('/git-mirror/v1/admin/' + endpoint, {
+      method,
+      headers: { Authorization: 'Bearer ' + token, ...(body ? {'Content-Type':'application/json'} : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+      cache:'no-store'
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Request failed (' + response.status + ')');
+    return data;
+  };
+  const request = async fn => {
+    message('');
+    try { await fn(); } catch (error) { message(error.message); }
+  };
+  const render = async () => {
+    const [status, repositories, activity] = await Promise.all([
+      api('status'), api('repositories'), api('activity')
+    ]);
+    $('status').textContent = 'Client: ' + status.clientId + ' · MQTT: ' +
+      (status.mqttConnected ? 'Connected' : 'Disconnected') + ' · Pending requests: ' + status.pending;
+    const root = $('repositories');
+    root.replaceChildren();
+    for (const repo of repositories.repositories) {
+      const card = document.createElement('article');
+      const title = document.createElement('div');
+      title.className = 'row';
+      const name = document.createElement('span');
+      name.className = 'name grow';
+      name.textContent = repo.id + ' · ' + (repo.upstream || 'Legacy static repository');
+      title.append(name);
+      const badge = document.createElement('span');
+      badge.className = 'pill';
+      badge.textContent = (repo.branches || []).join(', ');
+      title.append(badge);
+      const description = document.createElement('p');
+      description.className = 'muted';
+      description.textContent = repo.mirrorPath + (repo.pending ? ' · Sync pending' : '');
+      const controls = document.createElement('div');
+      controls.className = 'row';
+      const sync = document.createElement('button');
+      sync.textContent = 'Sync now';
+      sync.onclick = () => request(async () => { await api('repositories/' + encodeURIComponent(repo.id) + '/sync', 'POST'); message('Sync requested'); await render(); });
+      const remove = document.createElement('button');
+      remove.textContent = 'Remove subscription';
+      remove.className = 'danger';
+      remove.onclick = () => {
+        if (!confirm('Remove ' + repo.id + ' from scheduled synchronization? Local files will be preserved.')) return;
+        request(async () => { await api('repositories/' + encodeURIComponent(repo.id), 'DELETE'); await render(); });
+      };
+      controls.append(sync, remove);
+      card.append(title,description,controls);
+      root.append(card);
+    }
+    if (!repositories.repositories.length) root.textContent = 'No repositories configured.';
+    $('activity').textContent = (activity.events || []).map(event =>
+      new Date(event.at).toLocaleString() + ' · ' + event.event + ' · ' + (event.repoId || '') +
+      (event.status ? ' · ' + event.status : '')).join('\n') || 'No events yet.';
+  };
+  $('connect').onclick = () => request(async () => {
+    token = $('token').value;
+    await api('status');
+    $('token').value = '';
+    $('auth').classList.add('hidden');
+    $('dashboard').classList.remove('hidden');
+    await render();
+  });
+  $('refresh').onclick = () => request(render);
+  $('discover').onclick = () => request(async () => {
+    const result = await api('discover','POST',{ upstream: $('repo-upstream').value });
+    $('branches-result').textContent = 'Discovery requested (' + result.requestId + '). Refresh activity to see results.';
+  });
+  $('add').onclick = () => request(async () => {
+    await api('repositories','POST',{
+      id:$('repo-id').value.trim(),
+      upstream:$('repo-upstream').value.trim(),
+      branches:$('repo-branches').value.split(',').map(x=>x.trim()).filter(Boolean)
+    });
+    $('repo-id').value = '';
+    message('Repository added');
+    await render();
+  });
+})();
+</script>
+</body>
+</html>
