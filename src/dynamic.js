@@ -4,10 +4,13 @@ const segment = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 
 export function normalizeUpstream(value) {
   if (typeof value !== 'string') throw new Error('Repository must be organization/name');
-  const parts = value.split('/');
+  const parts = value.trim().split('/');
+  if (parts.length === 2 && parts[1].endsWith('.git')) {
+    parts[1] = parts[1].slice(0, -4);
+  }
   if (parts.length !== 2 || !parts.every(part =>
       segment.test(part) && !part.startsWith('.') && !part.endsWith('.') &&
-      !part.includes('..') && !part.endsWith('.git'))) {
+      !part.includes('..'))) {
     throw new Error('Invalid organization/repository identifier');
   }
   return parts.join('/');
