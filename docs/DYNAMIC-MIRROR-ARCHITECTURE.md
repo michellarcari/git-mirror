@@ -176,7 +176,7 @@ Each client serves its own small, responsive UI via the existing Node HTTP servi
 
 ### Authentication
 
-- Require `ADMIN_TOKEN` in the client's `.env`; fail closed for administrative routes if absent or too short.
+- Require `ADMIN_TOKEN` in the client's `.env`; fail closed for administrative routes if absent or shorter than 16 characters.
 - Use a single token, supplied by the operator; **no user accounts, password database, roles, or access-control UI**.
 - Do not reuse `UPLOAD_TOKEN`; retain distinct secrets and separate HTTP routes.
 - Submit the token in an HTTPS header (e.g. `Authorization: Bearer <token>`), never in URL parameters.
