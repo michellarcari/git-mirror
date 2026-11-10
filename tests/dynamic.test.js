@@ -6,9 +6,11 @@ import { bearerAuthorized, validateSubscription } from '../src/admin.js';
 
 test('normalizes canonical organization/repository names', () => {
   assert.equal(normalizeUpstream('IBV-IBM/portal'), 'IBV-IBM/portal');
+  assert.equal(normalizeUpstream('IBM-IBV-Reporting/Cron-Reporting.git'), 'IBM-IBV-Reporting/Cron-Reporting');
+  assert.equal(normalizeUpstream(' IBM-IBV-Reporting/Cron-Reporting.git '), 'IBM-IBV-Reporting/Cron-Reporting');
   for (const candidate of [
     '../portal', 'IBV-IBM/../portal', 'IBV-IBM/', '/portal',
-    'git@github.ibm.com:IBV-IBM/portal.git', 'IBV-IBM/portal.git',
+    'git@github.ibm.com:IBV-IBM/portal.git', 'IBV-IBM/.git',
     'IBV-IBM/portal/extra', 'IBV-IBM/-bad?query', 'IBV-IBM/.hidden'
   ]) {
     assert.throws(() => normalizeUpstream(candidate), { message: /Invalid|must be/ });
@@ -20,6 +22,11 @@ test('dynamic resolver is restricted to configured organizations', () => {
   const repo = resolveDynamicRepository('ibv-ibm/portal', gateway, { cacheDirectory: root });
   assert.equal(repo.url, 'git@github.ibm.com:IBV-IBM/portal.git');
   assert.equal(repo.mirrorPath, path.join(root, 'IBV-IBM', 'portal.git'));
+  const reporting = resolveDynamicRepository('IBM-IBV-Reporting/Cron-Reporting.git',
+    { ...gateway, allowedOrganizations: ['IBV-IBM', 'IBM-IBV-Reporting'] },
+    { cacheDirectory: root });
+  assert.equal(reporting.url, 'git@github.ibm.com:IBM-IBV-Reporting/Cron-Reporting.git');
+  assert.equal(reporting.mirrorPath, path.join(root, 'IBM-IBV-Reporting', 'Cron-Reporting.git'));
   assert.throws(() => resolveDynamicRepository('OtherOrg/portal', gateway, { cacheDirectory: root }),
     /not allowed/);
   assert.throws(() => resolveDynamicRepository('IBV-IBM/portal', { ...gateway, sshHost: 'github.ibm.com;bad' },
