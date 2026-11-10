@@ -92,9 +92,12 @@ async function processRequest(message) {
   if (!validHeads(have)) return;
   const discover = message.action === 'discover';
   const requested = discover ? ['*'] : (message.branches || branchPatterns(repo));
-  if (!discover && (!Array.isArray(requested) || !requested.length || requested.length > 100 ||
-      !requested.every(p => typeof p === 'string' &&
-        (branchPatterns({ id: repoId, branches: [p] }), true)))) return;
+  try {
+    if (!discover) branchPatterns({ id: repoId, branches: requested });
+  } catch (error) {
+    log('request.invalid_branches', { clientId, repoId, error: error.message });
+    return;
+  }
   const publish = (status, extra = {}) => mq.publish(
     `${prefix}/status/${clientId}`,
     JSON.stringify({ requestId, repoId, status, ...extra }),
@@ -111,7 +114,7 @@ async function processRequest(message) {
         return;
       }
       log('sync.upstream', { clientId, repoId, requestId, branchCount: Object.keys(all).length });
-      const allowed = branchPatterns(repo);
+      const allowed = dynamic && typeof message.upstream === 'string' ? requested : branchPatterns(repo);
       const heads = Object.fromEntries(Object.entries(all).filter(([name]) =>
         matchesBranch(name, allowed) && matchesBranch(name, requested)));
       if (!Object.keys(heads).length) {
