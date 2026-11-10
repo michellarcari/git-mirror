@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { pipeline } from 'node:stream/promises';
 import { normalizeUpstream } from './dynamic.js';
+import { gatewayRestarted, expirePending } from './lifecycle.js';
 import { bearerAuthorized, readJson, validateSubscription, saveClientConfig, sendJson } from './admin.js';
 import { loadConfig, mqttOptions, validId, validBranch, branchPatterns, matchesBranch, git, listHeads, ensureParent, log } from './common.js';
 
@@ -21,6 +22,7 @@ const token = process.env.UPLOAD_TOKEN;
 const adminToken = process.env.ADMIN_TOKEN;
 const activity = [];
 const discoveries = new Map();
+let observedGatewayBootId = null;
 const adminPage = fileURLToPath(new URL('../public/admin.html', import.meta.url));
 function record(event, details = {}) {
   activity.push({ at: new Date().toISOString(), event, ...details });
@@ -270,25 +272,27 @@ const server = http.createServer(async (req, res) => {
     if (tempDir) await rm(tempDir, { recursive: true, force: true });
   }
 });
-async function sweepAndSync({ reconnect = false } = {}) {
+async function sweepAndSync({ reconnect = false, gatewayRestart = false } = {}) {
   for (const [id, entry] of discoveries) {
     if (Date.now() - entry.created > requestTimeoutMs) discoveries.delete(id);
   }
-  for (const [id, entry] of pending) {
-    if (entry.uploading) continue;
-    if (reconnect || Date.now() - entry.created > requestTimeoutMs) {
-      pending.delete(id);
-      nextAttempt.set(entry.repo.id, 0);
-      log(reconnect ? 'request.requeued' : 'request.timed_out',
-        { repoId: entry.repo.id, requestId: id });
-    }
+  for (const { requestId, repoId } of expirePending(pending, Date.now(), requestTimeoutMs,
+    { gatewayRestart: reconnect || gatewayRestart })) {
+    nextAttempt.set(repoId, 0);
+    const event = gatewayRestart ? 'request.gateway_restarted' :
+      reconnect ? 'request.requeued' : 'request.timed_out';
+    log(event, { repoId, requestId });
+    record(event, { repoId });
   }
   for (const repo of repos.values()) {
     await requestSync(repo).catch(error => log('sync.error', { repoId: repo.id, error: error.message }));
   }
 }
 mq.on('connect', () => {
-  mq.subscribe(`${prefix}/status/${clientId}`, { qos: 1 }, error => {
+  mq.subscribe([
+    `${prefix}/status/${clientId}`,
+    `${prefix}/gateway/presence`
+  ], { qos: 1 }, error => {
     if (error) { log('mqtt.subscribe_failed', { error: error.message }); return; }
     log('client.connected', { clientId });
     void sweepAndSync({ reconnect: true });
@@ -297,6 +301,19 @@ mq.on('connect', () => {
 mq.on('message', (topic, data) => {
   try {
     const msg = JSON.parse(data.toString());
+    if (topic === `${prefix}/gateway/presence`) {
+      if (msg?.status !== 'online' || typeof msg.bootId !== 'string' ||
+          !/^[a-f0-9-]{36}$/.test(msg.bootId)) return;
+      const restarted = gatewayRestarted(observedGatewayBootId, msg.bootId);
+      observedGatewayBootId = msg.bootId;
+      if (restarted) {
+        log('gateway.restarted', { bootId: msg.bootId });
+        record('gateway.restarted');
+        void sweepAndSync({ gatewayRestart: true }).catch(error =>
+          log('sync.error', { error: error.message }));
+      }
+      return;
+    }
     if (topic !== `${prefix}/status/${clientId}` || !validId(msg.requestId)) return;
     if (discoveries.has(msg.requestId)) {
       const discovery = discoveries.get(msg.requestId);
@@ -321,6 +338,9 @@ mq.on('message', (topic, data) => {
   } catch (error) { log('status.invalid', { error: error.message }); }
 });
 mq.on('error', error => log('mqtt.error', { error: error.message }));
-setInterval(() => { if (mq.connected) void sweepAndSync(); }, 10000).unref();
+setInterval(() => {
+  // Expire orphaned requests even while MQTT is disconnected. Requeue on recovery.
+  void sweepAndSync().catch(error => log('sync.error', { error: error.message }));
+}, 10000).unref();
 server.listen(config.httpPort || 8787, config.httpHost || '127.0.0.1', () =>
   log('client.started', { clientId, port: config.httpPort || 8787 }));
