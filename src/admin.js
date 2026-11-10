@@ -5,7 +5,7 @@ import { normalizeUpstream } from './dynamic.js';
 import { validId, branchPatterns } from './common.js';
 
 export function bearerAuthorized(header, secret) {
-  if (typeof secret !== 'string' || secret.length < 24 ||
+  if (typeof secret !== 'string' || secret.length < 16 ||
       typeof header !== 'string' || !header.startsWith('Bearer ')) return false;
   const actual = Buffer.from(header.slice(7));
   const expected = Buffer.from(secret);
