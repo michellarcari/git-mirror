@@ -423,3 +423,27 @@ Use the same Windows account (and its SSH agent, key and known_hosts configurati
 ## Limitations
 
 This is an initial implementation, not a proven production deployment. Test with a non-sensitive repository before enabling any enterprise sync. Upstream credentials, TLS termination, ACLs, external routing, reverse-proxy size limits, and permissions are deployment-specific. Large repositories currently use local temporary bundle files. No unattended workspace deploy hook, tag mirroring, branch pruning, resumable upload or central UI is included.
+
+
+### Gateway restart recovery
+
+The gateway publishes a retained MQTT presence message at
+`git-mirror/v1/gateway/presence` with a per-process `bootId`, **after**
+subscribing to request topics. Clients subscribe to this message and requeue
+unresolved sync requests when the `bootId` changes. A reconnect to the broker
+by the same gateway process retains the same identity and does not cause
+unnecessary re-synchronization. Active bundle uploads are not interrupted.
+
+Clients also expire unanswered requests using `requestTimeoutSeconds`
+(default: 180 seconds; minimum: 30 seconds), checked every 10 seconds.
+The request is retried without restarting the client, whether the MQTT
+connection remains up or reconnects later. Retries use a new request ID;
+late status messages for expired requests are ignored. A client MQTT reconnect
+also requeues outstanding non-uploading requests.
+
+For a quicker fallback when the gateway is unavailable, set
+`requestTimeoutSeconds` in `config/client.json` to e.g. `60`. This can
+produce a duplicate request when a slow gateway is still processing, so
+prefer the default for large repositories. Uploads in progress are allowed
+to finish rather than being canceled by restart recovery.
+
