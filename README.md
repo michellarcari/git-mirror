@@ -253,7 +253,7 @@ Obtain organization security approval before enabling it.
 
 ### Client setup (Linux, after gateway deployment)
 
-Set `ADMIN_TOKEN` in the client's `.env` to a random secret of at least 24 characters.
+Set `ADMIN_TOKEN` in the client's `.env` to a random secret of at least 16 characters.
 Keep the separate existing `UPLOAD_TOKEN`. Add a trusted writable local storage root
 in the client's `config/client.json`:
 
