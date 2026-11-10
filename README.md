@@ -1,5 +1,7 @@
 # git-mirror
 
+**Planned dynamic mirroring and client administration:** [Technical design (EN-US)](docs/DYNAMIC-MIRROR-ARCHITECTURE.md). This document specifies the approved organization-wide repository access policy and per-client single-token UI; those features are not yet implemented.
+
 Read-only Git replication from a VPN-connected gateway to external application servers.
 
 The gateway can reach the private Git host **and initiate HTTPS requests to the application servers**. The application servers do **not** need network access to the gateway or private Git host.
