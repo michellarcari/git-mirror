@@ -98,7 +98,21 @@ code{font-size:.86rem;overflow-wrap:anywhere}pre{white-space:pre-wrap;max-height
         if (!confirm('Remove ' + repo.id + ' from scheduled synchronization? Local files will be preserved.')) return;
         request(async () => { await api('repositories/' + encodeURIComponent(repo.id), 'DELETE'); await render(); });
       };
-      controls.append(sync, remove);
+      const edit = document.createElement('button');
+      edit.textContent = 'Edit branches';
+      edit.className = 'secondary';
+      edit.onclick = () => {
+        const value = prompt('Branches (comma-separated)', (repo.branches || []).join(', '));
+        if (value === null) return;
+        request(async () => {
+          await api('repositories/' + encodeURIComponent(repo.id), 'PATCH', {
+            branches: value.split(',').map(x => x.trim()).filter(Boolean)
+          });
+          message('Branch selection updated');
+          await render();
+        });
+      };
+      controls.append(sync, edit, remove);
       card.append(title,description,controls);
       root.append(card);
     }
