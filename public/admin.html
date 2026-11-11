@@ -11,7 +11,14 @@ h1{font-size:1.65rem;margin:0 0 6px}.muted{color:#9daabd;font-size:.9rem}section
 label{display:block;color:#b8c6d9;font-size:.85rem;margin:12px 0 6px}
 input{width:100%;padding:11px 12px;border:1px solid #42536b;border-radius:8px;background:#101722;color:inherit;font:inherit}
 button{border:0;background:#477cf4;color:white;border-radius:8px;padding:10px 14px;cursor:pointer;font-weight:600}
-button:disabled{opacity:.55;cursor:default}.secondary{background:#36475f}.danger{background:#93434e}
+button:disabled{opacity:.55;cursor:default}
+.onboarding{margin-top:14px;border-top:1px solid #344359;padding-top:12px}
+.onboarding summary{cursor:pointer;font-weight:600;color:#c9d8f3}
+.onboarding pre{max-height:none;padding:12px;background:#0e1521;border-radius:8px;overflow-x:auto;white-space:pre}
+.onboarding p{line-height:1.5}
+.onboarding .copy{margin-top:8px}
+.branch-select{width:auto;min-width:160px}
+.notice{color:#e6ca83;font-size:.85rem}.secondary{background:#36475f}.danger{background:#93434e}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.grow{flex:1}.hidden{display:none}
 article{border:1px solid #344359;border-radius:10px;padding:14px;margin-top:10px}
 .name{font-weight:700}.pill{padding:4px 8px;background:#29394f;border-radius:50px;font-size:.75rem}
@@ -38,6 +45,10 @@ code{font-size:.86rem;overflow-wrap:anywhere}pre{white-space:pre-wrap;max-height
 <div class="row" style="margin-top:15px"><button id="discover" class="secondary">Discover branches</button>
 <button id="add">Add repository</button></div><div id="branches-result" class="muted"></div>
 </section>
+<section><h2>Repository onboarding</h2>
+<p class="muted">After adding and synchronizing a repository, expand <strong>Checkout setup</strong> under its card to connect an existing working tree to the local mirror. The commands are generated from that repository's mirror path and selected branch.</p>
+<p class="notice">Run these commands in your application's working directory, not in the bare mirror. Review local changes and divergent commits before pulling. The Git Mirror does not push changes to Enterprise GitHub.</p>
+</section>
 <section><h2>Recent activity</h2><pre id="activity">No events yet.</pre></section>
 </div>
 <div id="message" role="status"></div>
@@ -48,6 +59,72 @@ code{font-size:.86rem;overflow-wrap:anywhere}pre{white-space:pre-wrap;max-height
   let token = '';
   const $ = id => document.getElementById(id);
   const message = text => { $('message').textContent = text || ''; };
+  const shellQuote = value => '"' + String(value).replace(/"/g, '\\"') + '"';
+  const concreteBranches = patterns => (patterns || []).filter(branch => !branch.includes('*'));
+  const createOnboarding = repo => {
+    const details = document.createElement('details');
+    details.className = 'onboarding';
+    const summary = document.createElement('summary');
+    summary.textContent = 'Checkout setup';
+    details.append(summary);
+    const intro = document.createElement('p');
+    intro.className = 'muted';
+    intro.textContent = 'Use these commands inside an existing Git working tree after the mirror has completed its first sync.';
+    details.append(intro);
+    const branches = concreteBranches(repo.branches);
+    if (!branches.length) {
+      const note = document.createElement('p');
+      note.className = 'notice';
+      note.textContent = 'Only wildcard branch patterns are configured. Add or select a concrete branch before configuring a checkout.';
+      details.append(note);
+      return details;
+    }
+    const label = document.createElement('label');
+    label.textContent = 'Checkout branch';
+    const select = document.createElement('select');
+    select.className = 'branch-select';
+    for (const branch of branches) {
+      const option = document.createElement('option');
+      option.value = branch;
+      option.textContent = branch;
+      select.append(option);
+    }
+    details.append(label, select);
+    const code = document.createElement('pre');
+    const warning = document.createElement('p');
+    warning.className = 'notice';
+    warning.textContent = 'If a remote named mirror already exists, use git remote set-url mirror instead of git remote add mirror. A regular git pull may create a merge or fail when histories diverge; use git pull --ff-only when a fast-forward is required.';
+    const renderCommands = () => {
+      const branch = select.value;
+      const mirror = shellQuote(repo.mirrorPath);
+      code.textContent = [
+        '# Run from the application working tree',
+        'git status',
+        'git remote add mirror ' + mirror,
+        'git fetch mirror',
+        'git switch ' + shellQuote(branch),
+        'git branch --set-upstream-to=' + shellQuote('mirror/' + branch) + ' ' + shellQuote(branch),
+        'git pull',
+        '',
+        '# Safer alternative when only fast-forward updates are acceptable:',
+        '# git pull --ff-only'
+      ].join('\\n');
+    };
+    select.onchange = renderCommands;
+    renderCommands();
+    const copy = document.createElement('button');
+    copy.className = 'secondary copy';
+    copy.textContent = 'Copy commands';
+    copy.onclick = () => {
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(code.textContent)
+          .then(() => message('Commands copied'))
+          .catch(() => message('Clipboard access unavailable; select the commands to copy.'));
+      } else message('Clipboard access unavailable; select the commands to copy.');
+    };
+    details.append(code, warning, copy);
+    return details;
+  };
   const api = async (endpoint, method = 'GET', body) => {
     const response = await fetch('/git-mirror/v1/admin/' + endpoint, {
       method,
@@ -113,7 +190,7 @@ code{font-size:.86rem;overflow-wrap:anywhere}pre{white-space:pre-wrap;max-height
         });
       };
       controls.append(sync, edit, remove);
-      card.append(title,description,controls);
+      card.append(title,description,controls,createOnboarding(repo));
       root.append(card);
     }
     if (!repositories.repositories.length) root.textContent = 'No repositories configured.';
