@@ -46,8 +46,8 @@ code{font-size:.86rem;overflow-wrap:anywhere}pre{white-space:pre-wrap;max-height
 <button id="add">Add repository</button></div><div id="branches-result" class="muted"></div>
 </section>
 <section><h2>Repository onboarding</h2>
-<p class="muted">After adding and synchronizing a repository, expand <strong>Checkout setup</strong> under its card to connect an existing working tree to the local mirror. The commands are generated from that repository's mirror path and selected branch.</p>
-<p class="notice">Run these commands in your application's working directory, not in the bare mirror. Review local changes and divergent commits before pulling. The Git Mirror does not push changes to Enterprise GitHub.</p>
+<p class="muted">After adding and synchronizing a repository, expand <strong>Checkout setup</strong> under its card. Choose <strong>Clone new repository</strong> or <strong>Connect existing checkout</strong>. Commands use that repository's mirror path and selected branch.</p>
+<p class="notice">Run clone commands from the parent directory of a new checkout; run existing checkout commands inside the application directory. Never run them inside the bare mirror. Review local changes and divergent commits before pulling. The Git Mirror does not push changes to Enterprise GitHub.</p>
 </section>
 <section><h2>Recent activity</h2><pre id="activity">No events yet.</pre></section>
 </div>
@@ -69,48 +69,73 @@ code{font-size:.86rem;overflow-wrap:anywhere}pre{white-space:pre-wrap;max-height
     details.append(summary);
     const intro = document.createElement('p');
     intro.className = 'muted';
-    intro.textContent = 'Use these commands inside an existing Git working tree after the mirror has completed its first sync.';
+    intro.textContent = 'Wait until the initial mirror synchronization has completed, then clone a new working tree or connect an existing one.';
     details.append(intro);
+
     const branches = concreteBranches(repo.branches);
     if (!branches.length) {
       const note = document.createElement('p');
       note.className = 'notice';
-      note.textContent = 'Only wildcard branch patterns are configured. Add or select a concrete branch before configuring a checkout.';
+      note.textContent = 'Only wildcard patterns are configured. Add a concrete branch before generating checkout commands.';
       details.append(note);
       return details;
     }
-    const label = document.createElement('label');
-    label.textContent = 'Checkout branch';
-    const select = document.createElement('select');
-    select.className = 'branch-select';
+    const modeLabel = document.createElement('label');
+    modeLabel.textContent = 'Setup type';
+    const mode = document.createElement('select');
+    mode.className = 'branch-select';
+    for (const [value, title] of [
+      ['clone', 'Clone new repository'],
+      ['existing', 'Connect existing checkout']
+    ]) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = title;
+      mode.append(option);
+    }
+    const branchLabel = document.createElement('label');
+    branchLabel.textContent = 'Checkout branch';
+    const branchSelect = document.createElement('select');
+    branchSelect.className = 'branch-select';
     for (const branch of branches) {
       const option = document.createElement('option');
       option.value = branch;
       option.textContent = branch;
-      select.append(option);
+      branchSelect.append(option);
     }
-    details.append(label, select);
+    details.append(modeLabel, mode, branchLabel, branchSelect);
     const code = document.createElement('pre');
     const warning = document.createElement('p');
     warning.className = 'notice';
-    warning.textContent = 'If a remote named mirror already exists, use git remote set-url mirror instead of git remote add mirror. A regular git pull may create a merge or fail when histories diverge; use git pull --ff-only when a fast-forward is required.';
     const renderCommands = () => {
-      const branch = select.value;
+      const branch = branchSelect.value;
       const mirror = shellQuote(repo.mirrorPath);
-      code.textContent = [
-        '# Run from the application working tree',
-        'git status',
-        'git remote add mirror ' + mirror,
-        'git fetch mirror',
-        'git switch ' + shellQuote(branch),
-        'git branch --set-upstream-to=' + shellQuote('mirror/' + branch) + ' ' + shellQuote(branch),
-        'git pull',
-        '',
-        '# Safer alternative when only fast-forward updates are acceptable:',
-        '# git pull --ff-only'
-      ].join('\n');
+      if (mode.value === 'clone') {
+        code.textContent = [
+          '# Run from the parent directory of the new checkout',
+          'git clone -o mirror --branch ' + shellQuote(branch) + ' ' + mirror + ' ' + shellQuote(repo.id),
+          'cd ' + shellQuote(repo.id),
+          'git branch -vv',
+          '',
+          '# Later updates:',
+          'git pull --ff-only'
+        ].join('\n');
+        warning.textContent = 'The destination directory must not already exist. --branch explicitly selects the branch because the bare mirror may have an unset or different HEAD. The clone automatically configures the mirror remote and branch tracking.';
+      } else {
+        code.textContent = [
+          '# Run from the existing application working tree',
+          'git status',
+          'git remote add mirror ' + mirror,
+          'git fetch mirror',
+          'git switch ' + shellQuote(branch),
+          'git branch --set-upstream-to=' + shellQuote('mirror/' + branch) + ' ' + shellQuote(branch),
+          'git pull --ff-only'
+        ].join('\n');
+        warning.textContent = 'If a remote named mirror already exists, use git remote set-url mirror instead of git remote add mirror. Check for uncommitted changes or divergent local commits first. If fast-forward is impossible, review the history and use the validated deployment workflow rather than forcing a pull.';
+      }
     };
-    select.onchange = renderCommands;
+    mode.onchange = renderCommands;
+    branchSelect.onchange = renderCommands;
     renderCommands();
     const copy = document.createElement('button');
     copy.className = 'secondary copy';
