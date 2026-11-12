@@ -170,7 +170,8 @@ code{font-size:.86rem;overflow-wrap:anywhere}pre{white-space:pre-wrap;max-height
       api('status'), api('repositories'), api('activity')
     ]);
     $('status').textContent = 'Client: ' + status.clientId + ' · MQTT: ' +
-      (status.mqttConnected ? 'Connected' : 'Disconnected') + ' · Pending requests: ' + status.pending;
+      (status.mqttConnected ? 'Connected' : 'Disconnected') +
+      ' · Sync: ' + (status.syncMode || 'manual') + ' · Pending requests: ' + status.pending;
     const root = $('repositories');
     root.replaceChildren();
     for (const repo of repositories.repositories) {
