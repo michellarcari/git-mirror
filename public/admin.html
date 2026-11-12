@@ -113,11 +113,12 @@ code{font-size:.86rem;overflow-wrap:anywhere}pre{white-space:pre-wrap;max-height
     result.className = 'upload-result muted';
     const upload = document.createElement('button');
     upload.textContent = 'Upload and import bundle';
-    upload.disabled = !branches.length || repo.pending;
+    upload.disabled = !branches.length;
     if (!branches.length) result.textContent = 'Configure at least one concrete branch before uploading.';
     upload.onclick = () => {
       const file = fileInput.files?.[0];
       if (!file) { result.textContent = 'Select a .bundle file first.'; return; }
+      if (file.size === 0) { result.textContent = 'The selected bundle file is empty.'; return; }
       if (!confirm('Import ' + select.value + ' into the local bare mirror for ' + repo.id +
         '? Existing history must fast-forward; working trees are not changed.')) return;
       upload.disabled = true;
