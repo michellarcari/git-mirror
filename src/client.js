@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { pipeline } from 'node:stream/promises';
 import { normalizeUpstream } from './dynamic.js';
 import { gatewayRestarted } from './lifecycle.js';
+import { importManualBundle, validateImportedBranch } from './manual-bundle.js';
 import { syncMode, shouldScheduleSync } from './sync-policy.js';
 import { bearerAuthorized, readJson, validateSubscription, saveClientConfig, sendJson } from './admin.js';
 import { loadConfig, mqttOptions, validId, validBranch, branchPatterns, matchesBranch, git, listHeads, ensureParent, log } from './common.js';
@@ -35,6 +36,7 @@ for (const repo of repos.values()) {
   branchPatterns(repo);
 }
 const pending = new Map();
+const manualImports = new Set();
 const maxBytes = Number(config.maxBundleBytes || 2 * 1024 * 1024 * 1024);
 const intervalMs = Math.max(30000, Number(config.syncIntervalSeconds || 300) * 1000);
 const requestTimeoutMs = Math.max(30000, Number(config.requestTimeoutSeconds || 180) * 1000);
@@ -57,7 +59,7 @@ async function ensureMirror(repo) {
 }
 async function requestSync(repo, force = false, recoveryAttempt = 0) {
   if (!force && Date.now() < (nextAttempt.get(repo.id) || 0)) return false;
-  if (!mq.connected || [...pending.values()].some(p => p.repo.id === repo.id)) return false;
+  if (!mq.connected || manualImports.has(repo.id) || [...pending.values()].some(p => p.repo.id === repo.id)) return false;
   await ensureMirror(repo);
   const patterns = branchPatterns(repo);
   const heads = Object.fromEntries(Object.entries(await listHeads(repo.mirrorPath))
@@ -135,6 +137,56 @@ const server = http.createServer(async (req, res) => {
     res.end(html);
     return;
   }
+  const manualMatch = /^\/v1\/admin\/repositories\/([A-Za-z0-9_-]{1,64})\/bundle$/.exec(req.url || '');
+  if (manualMatch && req.method === 'PUT') {
+    if (!bearerAuthorized(req.headers.authorization, adminToken)) {
+      sendJson(res, 401, { error: 'Invalid administrator token' }); return;
+    }
+    const repo = repos.get(manualMatch[1]);
+    if (!repo) { sendJson(res, 404, { error: 'Repository not found' }); return; }
+    const branch = req.headers['x-mirror-branch'];
+    try { validateImportedBranch(repo, branch); }
+    catch (error) { sendJson(res, error.status || 400, { error: error.message }); return; }
+    if (manualImports.has(repo.id) || [...pending.values()].some(entry => entry.repo.id === repo.id)) {
+      sendJson(res, 409, { error: 'Another synchronization or import is pending for this repository' });
+      return;
+    }
+    const length = Number(req.headers['content-length']);
+    if (!Number.isSafeInteger(length) || length < 1 || length > maxBytes ||
+        req.headers['content-type'] !== 'application/octet-stream') {
+      sendJson(res, 413, { error: 'Expected an application/octet-stream Git bundle within maxBundleBytes' });
+      return;
+    }
+    manualImports.add(repo.id);
+    let tempDir;
+    try {
+      tempDir = await mkdtemp(path.join(tmpdir(), 'git-mirror-manual-'));
+      const filename = path.join(tempDir, 'snapshot.bundle');
+      let bytes = 0;
+      req.on('data', chunk => {
+        bytes += chunk.length;
+        if (bytes > maxBytes) req.destroy(new Error('Bundle exceeds size limit'));
+      });
+      await pipeline(req, createWriteStream(filename, { flags: 'wx' }));
+      if ((await stat(filename)).size !== length) {
+        throw new Error('Incomplete bundle upload');
+      }
+      const heads = await importManualBundle(repo, filename, branch, { ensureMirror });
+      nextAttempt.set(repo.id, Date.now() + intervalMs);
+      recovering.delete(repo.id);
+      record('bundle.manual_imported', { repoId: repo.id, branches: [branch] });
+      log('bundle.manual_imported', { repoId: repo.id, branch, bytes: length, heads });
+      sendJson(res, 200, { ok: true, repoId: repo.id, heads, bytes: length });
+    } catch (error) {
+      record('bundle.manual_import_failed', { repoId: repo.id, error: error.message });
+      log('bundle.manual_import_failed', { repoId: repo.id, error: error.message });
+      if (!res.headersSent) sendJson(res, error.status || 422, { error: error.message });
+    } finally {
+      manualImports.delete(repo.id);
+      if (tempDir) await rm(tempDir, { recursive: true, force: true });
+    }
+    return;
+  }
   if (req.url?.startsWith('/v1/admin/')) {
     if (!bearerAuthorized(req.headers.authorization, adminToken)) {
       sendJson(res, 401, { error: 'Invalid administrator token' });
@@ -155,7 +207,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 200, { repositories: [...repos.values()].map(repo => ({
           id: repo.id, upstream: repo.upstream || null, branches: branchPatterns(repo),
           mirrorPath: repo.mirrorPath,
-          pending: [...pending.values()].some(entry => entry.repo.id === repo.id)
+          pending: manualImports.has(repo.id) || [...pending.values()].some(entry => entry.repo.id === repo.id)
         })) });
         return;
       }
@@ -198,7 +250,7 @@ const server = http.createServer(async (req, res) => {
           return;
         }
         if (req.method === 'PATCH' && !repoMatch[2]) {
-          if ([...pending.values()].some(entry => entry.repo.id === repo.id)) {
+          if (manualImports.has(repo.id) || [...pending.values()].some(entry => entry.repo.id === repo.id)) {
             sendJson(res, 409, { error: 'Synchronization is pending' }); return;
           }
           const body = await readJson(req);
@@ -240,7 +292,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method !== 'PUT' || !match) { res.writeHead(404).end(); return; }
   if (!authorized(req.headers.authorization)) { res.writeHead(401).end(); return; }
   const entry = pending.get(match[1]);
-  if (!entry || entry.uploading || Date.now() - entry.created > 15 * 60 * 1000 ||
+  if (!entry || entry.uploading || manualImports.has(entry.repo.id) || Date.now() - entry.created > 15 * 60 * 1000 ||
       req.headers['x-mirror-repo'] !== entry.repo.id) {
     res.writeHead(409).end(); return;
   }
