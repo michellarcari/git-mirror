@@ -139,7 +139,7 @@ code{font-size:.86rem;overflow-wrap:anywhere}pre{white-space:pre-wrap;max-height
         if (xhr.status === 200 && data.ok) {
           result.textContent = 'Imported ' + select.value + ' at ' + (data.heads?.[select.value] || 'unknown commit') +
             '. Your checkout can now fetch or pull from the local mirror.';
-          void request(render);
+          message('Offline bundle imported successfully. Refresh the repository list to see its updated status.');
         } else result.textContent = data.error || 'Import failed (HTTP ' + xhr.status + ')';
         upload.disabled = false;
       };
