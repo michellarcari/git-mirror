@@ -18,7 +18,7 @@ button:disabled{opacity:.55;cursor:default}
 .onboarding p{line-height:1.5}
 .onboarding .copy{margin-top:8px}
 .branch-select{width:auto;min-width:160px}
-.notice{color:#e6ca83;font-size:.85rem}.secondary{background:#36475f}.danger{background:#93434e}
+.notice{color:#e6ca83;font-size:.85rem}.bundle-upload{padding-top:12px;margin-top:12px;border-top:1px solid #344359}.bundle-upload input[type=file]{padding:8px}.bundle-upload progress{width:100%;height:12px;margin:10px 0}.bundle-upload .upload-result{overflow-wrap:anywhere}.secondary{background:#36475f}.danger{background:#93434e}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.grow{flex:1}.hidden{display:none}
 article{border:1px solid #344359;border-radius:10px;padding:14px;margin-top:10px}
 .name{font-weight:700}.pill{padding:4px 8px;background:#29394f;border-radius:50px;font-size:.75rem}
@@ -46,7 +46,7 @@ code{font-size:.86rem;overflow-wrap:anywhere}pre{white-space:pre-wrap;max-height
 <button id="add">Add repository</button></div><div id="branches-result" class="muted"></div>
 </section>
 <section><h2>Repository onboarding</h2>
-<p class="muted">After adding and synchronizing a repository, expand <strong>Checkout setup</strong> under its card. Choose <strong>Clone new repository</strong> or <strong>Connect existing checkout</strong>. Commands use that repository's mirror path and selected branch.</p>
+<p class="muted">After adding a repository, you may upload an offline Git bundle directly (no Gateway required), or expand <strong>Checkout setup</strong> under its card. Choose <strong>Clone new repository</strong> or <strong>Connect existing checkout</strong>. Commands use that repository's mirror path and selected branch.</p>
 <p class="notice">Run clone commands from the parent directory of a new checkout; run existing checkout commands inside the application directory. Never run them inside the bare mirror. Review local changes and divergent commits before pulling. The Git Mirror does not push changes to Enterprise GitHub.</p>
 </section>
 <section><h2>Recent activity</h2><pre id="activity">No events yet.</pre></section>
@@ -61,6 +61,98 @@ code{font-size:.86rem;overflow-wrap:anywhere}pre{white-space:pre-wrap;max-height
   const message = text => { $('message').textContent = text || ''; };
   const shellQuote = value => '"' + String(value).replace(/"/g, '\\"') + '"';
   const concreteBranches = patterns => (patterns || []).filter(branch => !branch.includes('*'));
+  const createBundleUpload = repo => {
+    const details = document.createElement('details');
+    details.className = 'bundle-upload';
+    const heading = document.createElement('summary');
+    heading.textContent = 'Import offline Git bundle';
+    details.append(heading);
+    const note = document.createElement('p');
+    note.className = 'muted';
+    note.textContent = 'Use a single full Git bundle exported from a trusted development checkout. This updates the local bare mirror only; it does not deploy files or contact the Gateway.';
+    details.append(note);
+    const branchLabel = document.createElement('label');
+    branchLabel.textContent = 'Branch to import';
+    const select = document.createElement('select');
+    select.className = 'branch-select';
+    const branches = concreteBranches(repo.branches);
+    branches.forEach(branch => {
+      const option = document.createElement('option');
+      option.value = branch;
+      option.textContent = branch;
+      select.append(option);
+    });
+    const fileLabel = document.createElement('label');
+    fileLabel.textContent = 'Git bundle file';
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = '.bundle,application/octet-stream';
+    const exportLabel = document.createElement('p');
+    exportLabel.className = 'muted';
+    const commands = document.createElement('pre');
+    const renderExport = () => {
+      const branch = select.value;
+      commands.textContent = [
+        '# On your development computer, inside the repository:',
+        'git status',
+        'git bundle create ' + shellQuote(repo.id + '-' + branch.replace(/\//g, '-') + '.bundle') +
+          ' ' + shellQuote('refs/heads/' + branch),
+        'git bundle verify ' + shellQuote(repo.id + '-' + branch.replace(/\//g, '-') + '.bundle'),
+        '',
+        '# Upload the resulting .bundle file below.'
+      ].join('\n');
+    };
+    select.onchange = renderExport;
+    renderExport();
+    exportLabel.textContent = 'Create the snapshot from a committed local branch (uncommitted changes are not included):';
+    const progress = document.createElement('progress');
+    progress.max = 100;
+    progress.value = 0;
+    progress.className = 'hidden';
+    const result = document.createElement('p');
+    result.className = 'upload-result muted';
+    const upload = document.createElement('button');
+    upload.textContent = 'Upload and import bundle';
+    upload.disabled = !branches.length || repo.pending;
+    if (!branches.length) result.textContent = 'Configure at least one concrete branch before uploading.';
+    upload.onclick = () => {
+      const file = fileInput.files?.[0];
+      if (!file) { result.textContent = 'Select a .bundle file first.'; return; }
+      if (!confirm('Import ' + select.value + ' into the local bare mirror for ' + repo.id +
+        '? Existing history must fast-forward; working trees are not changed.')) return;
+      upload.disabled = true;
+      result.textContent = 'Uploading and verifying Git bundle...';
+      progress.value = 0;
+      progress.classList.remove('hidden');
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', '/git-mirror/v1/admin/repositories/' + encodeURIComponent(repo.id) + '/bundle');
+      xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      xhr.setRequestHeader('X-Mirror-Branch', select.value);
+      xhr.upload.onprogress = event => {
+        if (event.lengthComputable) progress.value = Math.round(event.loaded / event.total * 100);
+      };
+      xhr.onload = () => {
+        let data = {};
+        try { data = JSON.parse(xhr.responseText); } catch {}
+        if (xhr.status === 200 && data.ok) {
+          result.textContent = 'Imported ' + select.value + ' at ' + (data.heads?.[select.value] || 'unknown commit') +
+            '. Your checkout can now fetch or pull from the local mirror.';
+          void request(render);
+        } else result.textContent = data.error || 'Import failed (HTTP ' + xhr.status + ')';
+        upload.disabled = false;
+      };
+      xhr.onerror = () => { result.textContent = 'Upload failed: network connection lost.'; upload.disabled = false; };
+      xhr.onabort = () => { result.textContent = 'Upload canceled.'; upload.disabled = false; };
+      xhr.send(file);
+    };
+    const warning = document.createElement('p');
+    warning.className = 'notice';
+    warning.textContent = 'The bundle must contain exactly the selected branch. The import rejects divergent history rather than overwriting it. Only committed Git objects are included; Git LFS binaries and uncommitted files are not included.';
+    details.append(branchLabel, select, exportLabel, commands, fileLabel, fileInput,
+      progress, upload, result, warning);
+    return details;
+  };
   const createOnboarding = repo => {
     const details = document.createElement('details');
     details.className = 'onboarding';
@@ -216,7 +308,7 @@ code{font-size:.86rem;overflow-wrap:anywhere}pre{white-space:pre-wrap;max-height
         });
       };
       controls.append(sync, edit, remove);
-      card.append(title,description,controls,createOnboarding(repo));
+      card.append(title,description,controls,createBundleUpload(repo),createOnboarding(repo));
       root.append(card);
     }
     if (!repositories.repositories.length) root.textContent = 'No repositories configured.';
