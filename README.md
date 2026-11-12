@@ -484,3 +484,75 @@ updating checkouts from those mirrors.
 **Deployment:** update the gateway and all clients together, then verify a
 manual synchronization from Client Admin. Until the update is deployed,
 older clients may continue sending scheduled requests.
+
+## Emergency offline mirror refresh (no gateway required)
+
+A client administrator can upload a **full Git bundle** directly to that
+client's local bare mirror. This requires only the client HTTPS Admin UI and
+its `ADMIN_TOKEN`; MQTT, gateway access and upstream SSH are not required.
+
+From the development computer's **committed** Git checkout:
+
+```powershell
+git status
+git switch main
+git bundle create myrepo-main.bundle refs/heads/main
+git bundle verify myrepo-main.bundle
+```
+
+Export the exact local branch you want to import. For other branches, replace
+`main` accordingly. A bundle is one binary file containing Git objects and
+refs, not a ZIP of the working directory. Uncommitted changes, ignored files
+and Git LFS binaries are **not** included. Ensure the branch contains the
+latest approved commits before exporting.
+
+In the Client Admin UI, open the appropriate repository card and select
+**Import offline Git bundle**. Choose the same branch, select the `.bundle`
+file and click **Upload and import bundle**. The API endpoint is
+`PUT /v1/admin/repositories/:id/bundle` with
+`Authorization: Bearer ADMIN_TOKEN`, `Content-Type: application/octet-stream`
+and `X-Mirror-Branch: main`. Request body is the raw bundle bytes
+(no multipart form or base64 conversion).
+
+The client streams the upload to a temporary file, checks the configured
+`maxBundleBytes` limit, runs `git bundle verify`, requires exactly the selected
+branch reference, and fetches it into the local bare mirror with an **atomic,
+non-forced update**. The operation never modifies an application working tree.
+An existing branch must fast-forward; a divergent branch is rejected rather
+than overwritten. Inspect divergence and resolve it explicitly before retrying.
+
+If an unanswered Gateway request exists for the repository, the offline import
+supersedes it and late Gateway uploads for the old request ID are rejected.
+A currently active bundle transfer cannot be interrupted by the import.
+After a successful offline import, run `git fetch mirror` and
+`git pull --ff-only` **from the application checkout**, if it is safe to
+fast-forward. No application deployment is triggered automatically.
+
+### Reverse-proxy upload limits
+
+The default IIS request body limit may be much smaller than a Git bundle.
+For an IIS site that **only** hosts this Client Admin and uses ARR, configure
+a carefully scoped `requestFiltering` maximum, for example 512 MiB:
+
+```xml
+<system.webServer>
+  <security>
+    <requestFiltering>
+      <requestLimits maxAllowedContentLength="536870912" />
+    </requestFiltering>
+  </security>
+</system.webServer>
+```
+
+Apply the setting to the correct IIS site/location rather than unrelated
+applications. The proxy/edge service in front of IIS may enforce an even
+smaller upload limit; the smallest limit applies. Increase limits only to
+the size needed, keep HTTPS and the token requirement, and restrict access
+to the Admin UI according to your organization's policies. For NGINX,
+set `client_max_body_size` on the corresponding admin upload location.
+The Node client also enforces `maxBundleBytes` (2 GiB by default).
+
+For large bundles that exceed an edge-provider upload limit, prefer an
+authorized direct HTTPS route or a controlled file transfer followed by
+a local `git bundle verify` and `git fetch`; do not disable authentication
+or corporate network controls to bypass upload limits.
