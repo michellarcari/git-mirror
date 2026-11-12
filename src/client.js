@@ -147,8 +147,9 @@ const server = http.createServer(async (req, res) => {
     const branch = req.headers['x-mirror-branch'];
     try { validateImportedBranch(repo, branch); }
     catch (error) { sendJson(res, error.status || 400, { error: error.message }); return; }
-    if (manualImports.has(repo.id) || [...pending.values()].some(entry => entry.repo.id === repo.id)) {
-      sendJson(res, 409, { error: 'Another synchronization or import is pending for this repository' });
+    if (manualImports.has(repo.id) ||
+        [...pending.values()].some(entry => entry.repo.id === repo.id && entry.uploading)) {
+      sendJson(res, 409, { error: 'A bundle transfer is already running for this repository' });
       return;
     }
     const length = Number(req.headers['content-length']);
@@ -157,6 +158,12 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 413, { error: 'Expected an application/octet-stream Git bundle within maxBundleBytes' });
       return;
     }
+    // Cancel unanswered MQTT requests so an offline import works even when
+    // the Gateway is down. Late Gateway uploads for those IDs receive HTTP 409.
+    for (const [id, entry] of pending) {
+      if (entry.repo.id === repo.id) pending.delete(id);
+    }
+    recovering.delete(repo.id);
     manualImports.add(repo.id);
     let tempDir;
     try {
