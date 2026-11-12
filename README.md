@@ -348,8 +348,7 @@ Each client tracks outstanding requests by request ID. A watchdog runs every 10 
 If a request has no terminal response after `requestTimeoutSeconds` (default 180),
 it is marked `request.timed_out`, removed from the pending set, and a fresh request is published.
 After a broker reconnection the client re-queues pending requests that are not actively uploading.
-A reported failure is retried after `retryDelaySeconds` (default 30);
-successful/unchanged requests respect `syncIntervalSeconds` (default 300).
+In manual mode, a reported upstream failure does not trigger another fetch. Interrupted requests can be recovered a bounded number of times. In opt-in interval mode, failures respect `retryDelaySeconds` (default 30) and successful requests respect `syncIntervalSeconds` (default 300).
 Incoming late responses for previous request IDs are ignored and logged as `status.stale`.
 Active uploads are not expired by the watchdog.
 
@@ -359,7 +358,8 @@ Example optional settings in `config/client.json`:
 {
   "requestTimeoutSeconds": 180,
   "retryDelaySeconds": 30,
-  "syncIntervalSeconds": 300
+  "syncMode": "manual",
+  "maxRecoveryRetries": 2
 }
 ```
 
@@ -381,7 +381,7 @@ Gateway log events include `sync.requested`, `sync.started`, `sync.upstream`,
 
 ## Operations
 
-- Each client requests its configured branches at startup, at the scheduled interval, and automatically after timeouts/reconnections.
+- Clients use on-demand synchronization by default. Scheduled updates require an explicit `syncMode: "interval"` setting.
 - One bare repository stores all branches, so branches share Git objects rather than duplicating clones.
 - The gateway runs Git fetch and bundle generation when a request arrives.
 - Transfers use HTTP PUT with a per-client bearer token and an unguessable request ID.
@@ -436,8 +436,9 @@ unnecessary re-synchronization. Active bundle uploads are not interrupted.
 
 Clients also expire unanswered requests using `requestTimeoutSeconds`
 (default: 180 seconds; minimum: 30 seconds), checked every 10 seconds.
-The request is retried without restarting the client, whether the MQTT
-connection remains up or reconnects later. Retries use a new request ID;
+In manual mode, an interrupted request is retried up to `maxRecoveryRetries` times
+(default: 2) without restarting the client. Subsequent attempts require a
+new manual synchronization. In opt-in interval mode, scheduled retries continue. Retries use a new request ID;
 late status messages for expired requests are ignored. A client MQTT reconnect
 also requeues outstanding non-uploading requests.
 
@@ -447,3 +448,39 @@ produce a duplicate request when a slow gateway is still processing, so
 prefer the default for large repositories. Uploads in progress are allowed
 to finish rather than being canceled by restart recovery.
 
+
+## On-demand upstream updates (default)
+
+The client now defaults to `syncMode: "manual"`. Merely starting a client,
+restarting the gateway, reconnecting to MQTT, or waiting for a timer does **not**
+create a fresh upstream SSH fetch. The gateway runs `git remote update --prune`
+only when a client has explicitly requested synchronization or branch discovery.
+The gateway itself does not run an upstream polling loop.
+
+In manual mode, upstream updates are initiated by:
+
+- Clicking **Sync now** in Client Admin, or using the local authenticated sync API/CLI
+- Adding a repository in Client Admin (initial synchronization)
+- Clicking **Discover branches** (an explicit upstream lookup)
+- Automatically recovering an interrupted explicit sync, bounded by `maxRecoveryRetries`
+
+A confirmed error (for example, SSH connection refused) ends that manual
+request and does **not** trigger repeated upstream retries.
+
+To enable scheduled synchronization on a particular client, opt in with:
+
+```json
+{
+  "syncMode": "interval",
+  "syncIntervalSeconds": 300
+}
+```
+
+Merge these properties into `config/client.json` and restart `github-client`.
+Leaving out `syncMode` is equivalent to `"manual"`. Settings are
+per-client. Manual mode does not prevent serving existing local Git mirrors or
+updating checkouts from those mirrors.
+
+**Deployment:** update the gateway and all clients together, then verify a
+manual synchronization from Client Admin. Until the update is deployed,
+older clients may continue sending scheduled requests.
