@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { pipeline } from 'node:stream/promises';
 import { normalizeUpstream } from './dynamic.js';
-import { gatewayRestarted, expirePending } from './lifecycle.js';
+import { gatewayRestarted } from './lifecycle.js';
+import { syncMode, shouldScheduleSync } from './sync-policy.js';
 import { bearerAuthorized, readJson, validateSubscription, saveClientConfig, sendJson } from './admin.js';
 import { loadConfig, mqttOptions, validId, validBranch, branchPatterns, matchesBranch, git, listHeads, ensureParent, log } from './common.js';
 
@@ -39,6 +40,9 @@ const intervalMs = Math.max(30000, Number(config.syncIntervalSeconds || 300) * 1
 const requestTimeoutMs = Math.max(30000, Number(config.requestTimeoutSeconds || 180) * 1000);
 const retryDelayMs = Math.max(5000, Number(config.retryDelaySeconds || 30) * 1000);
 const nextAttempt = new Map();
+const mode = syncMode(config);
+const recovering = new Map();
+const maxRecoveryRetries = Math.max(0, Math.min(5, Number(config.maxRecoveryRetries ?? 2)));
 const mq = mqtt.connect(process.env.MQTT_URL, mqttOptions());
 
 async function ensureMirror(repo) {
@@ -51,7 +55,7 @@ async function ensureMirror(repo) {
     await git(['init', '--bare', repo.mirrorPath]);
   }
 }
-async function requestSync(repo, force = false) {
+async function requestSync(repo, force = false, recoveryAttempt = 0) {
   if (!force && Date.now() < (nextAttempt.get(repo.id) || 0)) return false;
   if (!mq.connected || [...pending.values()].some(p => p.repo.id === repo.id)) return false;
   await ensureMirror(repo);
@@ -59,7 +63,7 @@ async function requestSync(repo, force = false) {
   const heads = Object.fromEntries(Object.entries(await listHeads(repo.mirrorPath))
     .filter(([name]) => matchesBranch(name, patterns)));
   const requestId = randomUUID();
-  pending.set(requestId, { repo, created: Date.now(), uploading: false });
+  pending.set(requestId, { repo, created: Date.now(), uploading: false, recoveryAttempt });
   nextAttempt.set(repo.id, Date.now() + intervalMs);
   mq.publish(`${prefix}/request/${clientId}`,
     JSON.stringify({ clientId, repoId: repo.id, requestId, branches: patterns, heads, ...(repo.upstream ? { upstream: repo.upstream } : {}) }),
@@ -67,6 +71,7 @@ async function requestSync(repo, force = false) {
     error => {
       if (error) {
         pending.delete(requestId);
+        recovering.delete(repo.id);
         nextAttempt.set(repo.id, Date.now() + retryDelayMs);
         log('request.failed', { repoId: repo.id, error: error.message });
       } else { log('request.sent', { repoId: repo.id, branches: patterns, requestId }); record('request.sent', { repoId: repo.id }); }
@@ -139,7 +144,7 @@ const server = http.createServer(async (req, res) => {
     try {
       if (req.method === 'GET' && route === 'status') {
         sendJson(res, 200, { clientId, mqttConnected: mq.connected, pending: pending.size,
-          repositoryCount: repos.size, adminEnabled: true });
+          repositoryCount: repos.size, syncMode: mode, adminEnabled: true });
         return;
       }
       if (req.method === 'GET' && route === 'activity') {
@@ -218,6 +223,7 @@ const server = http.createServer(async (req, res) => {
           config.repositories = nextConfig.repositories;
           repos.delete(repo.id);
           nextAttempt.delete(repo.id);
+          recovering.delete(repo.id);
           record('repository.removed', { repoId: repo.id });
           sendJson(res, 200, { ok: true });
           return;
@@ -276,16 +282,34 @@ async function sweepAndSync({ reconnect = false, gatewayRestart = false } = {}) 
   for (const [id, entry] of discoveries) {
     if (Date.now() - entry.created > requestTimeoutMs) discoveries.delete(id);
   }
-  for (const { requestId, repoId } of expirePending(pending, Date.now(), requestTimeoutMs,
-    { gatewayRestart: reconnect || gatewayRestart })) {
-    nextAttempt.set(repoId, 0);
+  const expired = [...pending.entries()]
+    .filter(([, entry]) => !entry.uploading &&
+      (reconnect || gatewayRestart || Date.now() - entry.created >= requestTimeoutMs));
+  for (const [requestId, entry] of expired) {
+    pending.delete(requestId);
+    const nextRetry = entry.recoveryAttempt + 1;
+    nextAttempt.set(entry.repo.id, 0);
     const event = gatewayRestart ? 'request.gateway_restarted' :
       reconnect ? 'request.requeued' : 'request.timed_out';
-    log(event, { repoId, requestId });
-    record(event, { repoId });
+    log(event, { repoId: entry.repo.id, requestId });
+    record(event, { repoId: entry.repo.id });
+    if (mode === 'manual' && nextRetry <= maxRecoveryRetries) {
+      recovering.set(entry.repo.id, nextRetry);
+    } else if (mode === 'manual') {
+      recovering.delete(entry.repo.id);
+      log('request.recovery_exhausted', { repoId: entry.repo.id });
+      record('request.recovery_exhausted', { repoId: entry.repo.id });
+    }
   }
+  if (!mq.connected) return;
   for (const repo of repos.values()) {
-    await requestSync(repo).catch(error => log('sync.error', { repoId: repo.id, error: error.message }));
+    const retry = recovering.get(repo.id);
+    if (!shouldScheduleSync(mode, { recovery: retry !== undefined })) continue;
+    // Consume the recovery ticket before dispatching. A failed MQTT publish
+    // must not create an unlimited retry loop in manual mode.
+    if (retry !== undefined) recovering.delete(repo.id);
+    await requestSync(repo, mode === 'manual', retry || 0)
+      .catch(error => log('sync.error', { repoId: repo.id, error: error.message }));
   }
 }
 mq.on('connect', () => {
@@ -343,4 +367,4 @@ setInterval(() => {
   void sweepAndSync().catch(error => log('sync.error', { error: error.message }));
 }, 10000).unref();
 server.listen(config.httpPort || 8787, config.httpHost || '127.0.0.1', () =>
-  log('client.started', { clientId, port: config.httpPort || 8787 }));
+  log('client.started', { clientId, port: config.httpPort || 8787, syncMode: mode }));
