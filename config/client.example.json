@@ -3,7 +3,6 @@
   "topicPrefix": "git-mirror/v1",
   "httpHost": "127.0.0.1",
   "httpPort": 8787,
-  "syncIntervalSeconds": 300,
   "maxBundleBytes": 2147483648,
   "repositories": [
     {
@@ -15,5 +14,6 @@
       "mirrorPath": "/var/lib/git-mirror/replicas/myapp.git"
     }
   ],
-  "mirrorRoot": "/var/lib/git-mirror/replicas"
+  "mirrorRoot": "/var/lib/git-mirror/replicas",
+  "syncMode": "manual"
 }
