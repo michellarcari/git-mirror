@@ -204,6 +204,8 @@ pre { white-space: pre-wrap; max-height: 220px; overflow: auto; color: #b7c8dd; 
     const branchLabel = document.createElement('label');
     branchLabel.textContent = 'Branch to import';
     const select = document.createElement('select');
+    select.id = 'bundle-branch-' + repo.id;
+    branchLabel.htmlFor = select.id;
     select.className = 'branch-select';
     const branches = concreteBranches(repo.branches);
     branches.forEach(branch => {
@@ -215,6 +217,8 @@ pre { white-space: pre-wrap; max-height: 220px; overflow: auto; color: #b7c8dd; 
     const fileLabel = document.createElement('label');
     fileLabel.textContent = 'Git bundle file';
     const fileInput = document.createElement('input');
+    fileInput.id = 'bundle-file-' + repo.id;
+    fileLabel.htmlFor = fileInput.id;
     fileInput.type = 'file';
     fileInput.accept = '.bundle,application/octet-stream';
     const exportLabel = document.createElement('p');
@@ -306,6 +310,8 @@ pre { white-space: pre-wrap; max-height: 220px; overflow: auto; color: #b7c8dd; 
     const modeLabel = document.createElement('label');
     modeLabel.textContent = 'Setup type';
     const mode = document.createElement('select');
+    mode.id = 'checkout-mode-' + repo.id;
+    modeLabel.htmlFor = mode.id;
     mode.className = 'branch-select';
     for (const [value, title] of [
       ['clone', 'Clone new repository'],
@@ -319,6 +325,8 @@ pre { white-space: pre-wrap; max-height: 220px; overflow: auto; color: #b7c8dd; 
     const branchLabel = document.createElement('label');
     branchLabel.textContent = 'Checkout branch';
     const branchSelect = document.createElement('select');
+    branchSelect.id = 'checkout-branch-' + repo.id;
+    branchLabel.htmlFor = branchSelect.id;
     branchSelect.className = 'branch-select';
     for (const branch of branches) {
       const option = document.createElement('option');
