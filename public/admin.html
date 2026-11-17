@@ -5,26 +5,156 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Git Mirror · Client Admin</title>
 <style>
-:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color-scheme:dark;background:#101722;color:#e5eaf3}
-*{box-sizing:border-box}body{margin:0;min-height:100vh}main{max-width:940px;margin:0 auto;padding:32px 20px}
-h1{font-size:1.65rem;margin:0 0 6px}.muted{color:#9daabd;font-size:.9rem}section{border:1px solid #303e52;background:#192331;border-radius:14px;padding:20px;margin-top:18px}
-label{display:block;color:#b8c6d9;font-size:.85rem;margin:12px 0 6px}
-input{width:100%;padding:11px 12px;border:1px solid #42536b;border-radius:8px;background:#101722;color:inherit;font:inherit}
-button{border:0;background:#477cf4;color:white;border-radius:8px;padding:10px 14px;cursor:pointer;font-weight:600}
-button:disabled{opacity:.55;cursor:default}
-.onboarding{margin-top:14px;border-top:1px solid #344359;padding-top:12px}
-.onboarding summary{cursor:pointer;font-weight:600;color:#c9d8f3}
-.onboarding pre{max-height:none;padding:12px;background:#0e1521;border-radius:8px;overflow-x:auto;white-space:pre}
-.onboarding p{line-height:1.5}
-.onboarding .copy{margin-top:8px}
-.branch-select{width:auto;min-width:160px}
-.notice{color:#e6ca83;font-size:.85rem}.bundle-upload{padding-top:12px;margin-top:12px;border-top:1px solid #344359}.bundle-upload input[type=file]{padding:8px}.bundle-upload progress{width:100%;height:12px;margin:10px 0}.bundle-upload .upload-result{overflow-wrap:anywhere}.secondary{background:#36475f}.danger{background:#93434e}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.grow{flex:1}.hidden{display:none}
-article{border:1px solid #344359;border-radius:10px;padding:14px;margin-top:10px}
-.name{font-weight:700}.pill{padding:4px 8px;background:#29394f;border-radius:50px;font-size:.75rem}
-code{font-size:.86rem;overflow-wrap:anywhere}pre{white-space:pre-wrap;max-height:220px;overflow:auto;color:#b7c8dd}
-#message{min-height:24px;margin-top:10px;color:#c6d8f8}
-@media(max-width:600px){main{padding:20px 12px}section{padding:16px}}
+
+:root {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: dark;
+  --bg: #101722;
+  --surface: #192331;
+  --field-bg: #101722;
+  --field-border: #42536b;
+  --border: #303e52;
+  --text: #e5eaf3;
+  --muted: #9daabd;
+  --primary: #477cf4;
+  --space-xs: 6px;
+  --space-sm: 10px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  background: var(--bg);
+  color: var(--text);
+}
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; line-height: 1.5; }
+main { max-width: 940px; margin: 0 auto; padding: 32px 20px; }
+h1 { font-size: 1.65rem; margin: 0 0 6px; }
+h2 { font-size: 1.2rem; margin: 0 0 var(--space-md); }
+p { margin: 0 0 var(--space-md); }
+.muted { color: var(--muted); font-size: .9rem; }
+section {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 14px;
+  padding: 20px;
+  margin-top: 18px;
+}
+label {
+  display: block;
+  color: #b8c6d9;
+  font-size: .875rem;
+  font-weight: 500;
+  margin: var(--space-md) 0 var(--space-xs);
+}
+input, select, textarea, button { font: inherit; }
+input:not([type="checkbox"]):not([type="radio"]),
+select, textarea {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  background: var(--field-bg);
+  color: var(--text);
+  line-height: 1.35;
+  margin: 0 0 var(--space-md);
+}
+input::placeholder, textarea::placeholder { color: #8c9cb2; opacity: 1; }
+select { appearance: auto; cursor: pointer; }
+select option { color: var(--text); background: var(--field-bg); }
+textarea { resize: vertical; min-height: 100px; }
+input[type="file"] { padding: 8px 10px; }
+input[type="file"]::file-selector-button {
+  font: inherit;
+  color: var(--text);
+  background: #36475f;
+  border: 1px solid #50627c;
+  border-radius: 6px;
+  padding: 6px 12px;
+  margin-right: 12px;
+  cursor: pointer;
+}
+input:focus-visible, select:focus-visible, textarea:focus-visible,
+button:focus-visible, summary:focus-visible {
+  outline: 2px solid #86aaff;
+  outline-offset: 2px;
+}
+button {
+  border: 0;
+  background: var(--primary);
+  color: white;
+  border-radius: 8px;
+  padding: 10px 14px;
+  min-height: 42px;
+  cursor: pointer;
+  font-weight: 600;
+}
+button:disabled { opacity: .55; cursor: default; }
+.secondary { background: #36475f; }
+.danger { background: #93434e; }
+.auth-actions, .form-actions { margin-top: var(--space-sm); }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.grow { flex: 1; }
+.hidden { display: none !important; }
+article {
+  border: 1px solid #344359;
+  border-radius: 10px;
+  padding: 16px;
+  margin-top: 14px;
+}
+article > .row { margin: 0 0 var(--space-md); }
+.name { font-weight: 700; overflow-wrap: anywhere; }
+.pill { padding: 4px 8px; background: #29394f; border-radius: 50px; font-size: .75rem; }
+.onboarding, .bundle-upload {
+  margin-top: var(--space-lg);
+  padding-top: var(--space-md);
+  border-top: 1px solid #344359;
+}
+.onboarding summary, .bundle-upload summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #c9d8f3;
+  padding: 2px 0;
+}
+.onboarding[open] > summary, .bundle-upload[open] > summary {
+  margin-bottom: var(--space-md);
+}
+.onboarding > :not(summary), .bundle-upload > :not(summary) {
+  max-width: 100%;
+}
+.onboarding pre, .bundle-upload pre {
+  max-height: 340px;
+  padding: 12px;
+  margin: var(--space-sm) 0 var(--space-md);
+  background: #0e1521;
+  border: 1px solid #344359;
+  border-radius: 8px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.onboarding p, .bundle-upload p { line-height: 1.5; }
+.onboarding .copy { margin-top: var(--space-xs); }
+.branch-select { width: 100%; }
+.notice { color: #e6ca83; font-size: .85rem; }
+.bundle-upload progress {
+  display: block;
+  width: 100%;
+  height: 12px;
+  margin: var(--space-md) 0;
+}
+.bundle-upload .upload-result { overflow-wrap: anywhere; }
+.bundle-upload > button { margin: var(--space-xs) 0 var(--space-md); }
+.bundle-upload > p:last-child, .onboarding > p:last-child { margin-bottom: 0; }
+code { font-size: .86rem; overflow-wrap: anywhere; }
+pre { white-space: pre-wrap; max-height: 220px; overflow: auto; color: #b7c8dd; }
+#message { min-height: 24px; margin-top: 10px; color: #c6d8f8; }
+@media (max-width: 600px) {
+  main { padding: 20px 12px; }
+  section { padding: 16px; }
+  .row > button { flex: 0 1 auto; }
+}
 </style>
 </head>
 <body>
@@ -32,7 +162,7 @@ code{font-size:.86rem;overflow-wrap:anywhere}pre{white-space:pre-wrap;max-height
 <header><h1>Git Mirror</h1><div class="muted">Client administration · Repository synchronization</div></header>
 <section id="auth"><h2>Access token</h2><label for="token">ADMIN_TOKEN</label>
 <input id="token" type="password" autocomplete="off" placeholder="Enter your administrator token">
-<div class="row" style="margin-top:14px"><button id="connect">Connect</button></div>
+<div class="row auth-actions"><button id="connect">Connect</button></div>
 </section>
 <div id="dashboard" class="hidden">
 <section><div class="row"><h2 class="grow">Status</h2><button id="refresh" class="secondary">Refresh</button></div>
@@ -42,7 +172,7 @@ code{font-size:.86rem;overflow-wrap:anywhere}pre{white-space:pre-wrap;max-height
 <label for="repo-id">Local ID</label><input id="repo-id" placeholder="portal">
 <label for="repo-upstream">Enterprise repository</label><input id="repo-upstream" placeholder="IBV-IBM/portal">
 <label for="repo-branches">Branches (comma-separated)</label><input id="repo-branches" value="staging" placeholder="main, staging, release/*">
-<div class="row" style="margin-top:15px"><button id="discover" class="secondary">Discover branches</button>
+<div class="row form-actions"><button id="discover" class="secondary">Discover branches</button>
 <button id="add">Add repository</button></div><div id="branches-result" class="muted"></div>
 </section>
 <section><h2>Repository onboarding</h2>
